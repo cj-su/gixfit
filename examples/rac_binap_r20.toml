@@ -1,0 +1,84 @@
+# gixfit: rac-BINAP film (2024 Sep CMS run, sample R20 = "3D", 50 nm, 170 C / 7 min anneal, ITO/glass)
+# candidates: rac-BINAP (C2/c, CSD 889725 XAZGUC), R-BINAP (P2_1, 1228557 PASRAC), S-BINAP (P2_1, 209977 HUZGUE)
+out_dir = "../runs/rac_binap_r20_pos1_th012"
+figures_top = 6
+
+[image]
+path = "../../../Rand Lab/Chiao-Jung (Jason) Su/GIWAXS Data/2024 Sep/stiched/YLL_r20_pos1_x-0.000_th0.120_10.00s_1662227_waxs_stitched.tiff"
+dead_pixels = [[116, 510], [146, 510]]
+edge = 15
+mask_nonpositive = true
+mask_grow = 2
+qz_min = 0.03
+
+[geometry]                       # from Brookhaven_Grazing_2024Sep.m: i0 = 459, j0 = ydim - 405 (1-indexed)
+wavelength = 0.9184
+sdd_mm = 259.0
+pixel_mm = 0.172
+x0 = 458.0
+y0 = 637.0
+
+# The ITO (222) ring (2.151 A^-1) sits at 2.07 A^-1 with the .m geometry -> compare with the ring calibration
+# (examples/ito_ring_calibration.py on blank R30 pos1 th0.150: x0 448.79+-0.44, y0 665.68+-0.75, SDD 260.83 mm)
+[[geometry_variants]]
+name = "nominal .m"
+
+[[geometry_variants]]
+name = "ITO-cal"
+x0 = 448.79
+y0 = 665.68
+sdd_mm = 260.83
+
+[peaks]
+threshold = 7.0
+s_small = 1.5
+s_large = 8.0
+min_sep = 4
+half = 8
+max_peaks = 300
+min_amp_sigma = 4.0
+
+[fit]
+qmax = 2.0
+q_range = [0.3, 1.85]
+mosaic_deg = 3.0
+min_rel_intensity = 0.003
+n_strong = 20
+merge_tol = 0.008
+tol_schedule = [[0.05, 10.0], [0.03, 6.0], [0.015, 4.0]]
+q_floor = 0.002
+chi_floor_deg = 0.7
+max_strain = 0.06
+max_angle_dev = 5.0
+prior_strain = 0.03
+prior_angle = 3.0
+free_cell = ["a", "b", "c", "beta"]     # monoclinic: alpha = gamma = 90 fixed
+
+[null]
+n = 15
+modes = ["chi", "q"]
+
+[plot]
+qxy_lim = [-1.0, 2.0]
+qz_lim = [0.0, 2.0]
+
+[[candidates]]
+name = "rac-BINAP_C2c"
+cif = "../../../Rand Lab/Chiao-Jung (Jason) Su/cif files/BINAP/rac-BINAP - 889725 - XAZGUC.cif"
+contact_planes = "auto"
+auto_maxidx = 2
+auto_top = 3
+
+[[candidates]]
+name = "R-BINAP_P21"
+cif = "../../../Rand Lab/Chiao-Jung (Jason) Su/cif files/BINAP/R-BINAP - 1228557 - PASRAC.cif"
+contact_planes = "auto"
+auto_maxidx = 2
+auto_top = 3
+
+[[candidates]]
+name = "S-BINAP_P21"
+cif = "../../../Rand Lab/Chiao-Jung (Jason) Su/cif files/BINAP/S-BINAP - 209977 - HUZGUE.cif"
+contact_planes = "auto"
+auto_maxidx = 2
+auto_top = 1

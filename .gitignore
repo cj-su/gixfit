@@ -1,0 +1,25 @@
+# Python build / cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Not part of the code repository: unpublished manuscript, analysis outputs,
+# collaborator-derived structures and outputs computed from unpublished beamline data
+paper/
+runs/
+library/NPB_published_cell_DFT_atoms.cif
+examples/worked_rubrene/report/
+examples/worked_rubrene/summary.json
+examples/worked_example_log.txt
+
+# Data files (raw images and pickled results are never committed)
+*.pkl
+*.tif
+*.tiff
+*.edf
+*.h5
+
+# Office lock files
+~$*

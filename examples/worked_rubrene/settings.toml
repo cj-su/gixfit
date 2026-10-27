@@ -1,0 +1,29 @@
+# gixfit app settings
+[app]
+image = "C:/Users/abc10/OneDrive - Princeton University/Rand Lab/Chiao-Jung (Jason) Su/GIWAXS Data/202506 Heterojunction/stitched/YLL_R5_pos1_x0.000_th0.120_10.00s_2020855_waxs_stitched.tiff"
+
+[settings]
+wavelength = 0.9184
+sdd_mm = 258.37
+pixel_mm = 0.172
+x0 = 464.6
+y0 = 646.67
+qz_min = 0.03
+edge = 15
+dead_pixels = [[116, 510], [146, 510]]
+mask_rects = []
+threshold = 7.0
+min_amp_sigma = 4.0
+max_peaks = 300
+q_min = 0.3
+q_max = 1.85
+mosaic_deg = 3.0
+max_strain = 0.06
+max_angle_dev = 5.0
+n_strong = 20
+max_textures = 1
+planes_maxidx = 2
+n_null = 100
+null_modes = ["chi", "q"]
+workers = 3
+identify_null_top = 3

@@ -1,0 +1,92 @@
+# gixfit example: pure NPB (R1, spot x1, alpha_i = 0.10 deg, fused silica, raw - no substrate subtraction)
+# vs the published NPB cell (Cheng & Cheng, as quoted; original reference not verified) with atomic positions
+# from the collaborator's DFT host crystal (geometry_009_original.in with the MoO3 unit removed).
+out_dir = "../runs/npb_R1x1_th010"
+figures_top = 6
+
+[image]
+path = "../../giwaxs_20260831 NPB MoO3/JF_R1_stitched_13_x1.000_th0.100_10.00s_2438590_000000_maxs.tiff"
+dead_pixels = [[116, 510], [146, 510]]     # 0-indexed (row, col)
+edge = 15
+mask_nonpositive = true                    # module gap + beam-stop shadow are <= 0
+mask_grow = 2
+mask_rects = []                            # [row0, row1, col0, col1]
+qz_min = 0.03                              # mask below the sample horizon (with the first geometry)
+
+[geometry]                                 # beam centre = DIRECT beam, 0-indexed
+wavelength = 0.9184
+sdd_mm = 259.0
+pixel_mm = 0.172
+x0 = 577.0                                 # i0 = 578 (1-indexed)
+y0 = 643.0                                 # j0 = ydim - 399 = 644 (1-indexed), "raw"
+# alpha_i_deg taken from the file name
+
+# The q-axis calibration is unresolved (handoff section 4): compare the raw centre with the XRD-anchored one.
+[[geometry_variants]]
+name = "raw j0=644"
+y0 = 643.0
+
+[[geometry_variants]]
+name = "XRD-cal j0=660.77"
+y0 = 659.77
+
+[peaks]
+threshold = 7.0          # detection significance (robust sigma units)
+s_small = 1.5
+s_large = 8.0
+min_sep = 4
+half = 8
+max_peaks = 300
+min_amp_sigma = 4.0
+
+[fit]
+qmax = 2.0
+q_range = [0.35, 1.9]
+mosaic_deg = 3.0
+min_rel_intensity = 0.003
+n_strong = 20
+merge_tol = 0.008
+tol_schedule = [[0.05, 10.0], [0.03, 6.0], [0.015, 4.0]]
+q_floor = 0.002
+chi_floor_deg = 0.7
+max_strain = 0.06
+max_angle_dev = 5.0
+prior_strain = 0.03
+prior_angle = 3.0
+free_geom = []
+
+[null]
+n = 20
+modes = ["chi", "q"]
+
+[multi]                  # python -m gixfit multi ...  (several textures per pattern)
+max_components = 3
+planes_maxidx = 2        # textures scanned: every contact plane with |h|,|k|,|l| <= 2
+prescreen_top = 10       # k >= 2: full joint refinement for the 10 best pre-scored textures
+prescreen_top_first = 0  # k = 1: refine every texture (0 = all)
+min_new_match = 3
+n_null = 12              # surrogates per null mode, each through the full greedy pipeline
+null_modes = ["chi", "q"]
+workers = 0              # 0 = all cores - 1
+# models = [["NPB_pubcell"], ["NPB_DFTcell"]]   # default: each candidate alone; ["A", "B"] = coexisting phases
+
+[plot]
+qxy_lim = [-0.6, 2.0]
+qz_lim = [0.0, 2.0]
+
+[[candidates]]
+name = "NPB_pubcell"
+aims = "../../giwaxs_20260831 NPB MoO3/reference_dft/geometry_009_original.in"
+drop_elements = ["Mo", "O"]
+cell = [10.3077, 11.3545, 14.4778, 82.339, 77.657, 75.526]
+contact_planes = "auto"
+auto_maxidx = 2
+auto_top = 3
+
+[[candidates]]
+name = "NPB_DFTcell"
+aims = "../../giwaxs_20260831 NPB MoO3/reference_dft/geometry_009_original.in"
+drop_elements = ["Mo", "O"]
+contact_planes = "auto"
+auto_maxidx = 2
+auto_top = 2
