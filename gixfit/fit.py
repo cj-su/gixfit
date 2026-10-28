@@ -22,7 +22,8 @@ from scipy.stats import spearmanr
 
 from .crystal import Cell, Structure, PARAM_NAMES
 from .geometry import Geometry
-from .pattern import hkl_sphere, fiber_qcoords, fiber_pattern, group_reflections, hkl_str, wedge_project
+from .pattern import (hkl_sphere, fiber_qcoords, fiber_pattern, group_reflections, hkl_str, wedge_project,
+                      polarization_factor)
 from .peaks import PeakTable
 
 
@@ -48,6 +49,7 @@ class FitConfig:
     free_tilt: bool = False
     max_tilt_deg: float = 3.0
     max_iter: int = 6
+    polarization: float | None = None           # horizontal polarisation fraction p_h (None = no polarisation factor)
 
     @classmethod
     def from_dict(cls, d):
@@ -126,6 +128,11 @@ class Problem:
         self.hkl = hkl_sphere(struct.cell, cfg.qmax * (1 + cfg.max_strain) + 0.05)
         ref = fiber_pattern(struct, self.contact, qmax=cfg.qmax * (1 + cfg.max_strain) + 0.05,
                             mosaic_deg=cfg.mosaic_deg)
+        if cfg.polarization is not None:                # optional polarisation factor, renormalised as in fiber_pattern
+            ref.I = ref.I * polarization_factor(ref.qxy, ref.qz, geom, cfg.polarization)
+            u = ref.I[ref.side >= 0]
+            r10 = np.sort(u)[-min(10, len(u))] if len(u) else 1.0
+            ref.I = ref.I / r10 if r10 > 0 else ref.I
         self.refl = ref
         self.side = ref.side
         self.rhkl = ref.hkl

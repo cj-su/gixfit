@@ -6,9 +6,10 @@ Each reflection appears at +q_xy and -q_xy on the detector.
 
 Predicted intensity (relative, for ranking/visibility only):
     I ~ |F|^2 / sqrt(q_xy^2 + (|G| sin(mosaic))^2)
-i.e. the fibre "Lorentz" factor (1/q_xy, ring circumference) regularised by the mosaic spread.  Polarisation,
-absorption and the DWBA transmission factor are ignored - adequate for deciding which peaks should be visible,
-not for quantitative intensity refinement.
+i.e. the fibre "Lorentz" factor (1/q_xy, ring circumference) regularised by the mosaic spread.  A polarisation
+factor is optional (FitConfig.polarization, applied by fit.Problem; off by default); absorption and the DWBA
+transmission factor are ignored - adequate for deciding which peaks should be visible, not for quantitative
+intensity refinement.
 """
 from __future__ import annotations
 
@@ -122,6 +123,18 @@ def fiber_pattern(struct: Structure, contact, qmax=2.0, mosaic_deg=3.0, tilt_deg
     qxy2 = np.concatenate([qxy, -qxy[~on_axis]])
     cat = lambda a: np.concatenate([a, a[~on_axis]])
     return Reflections(hkl2, side, qxy2, cat(qz), cat(q), cat(F2), cat(I))
+
+
+def polarization_factor(qxy, qz, geom, p_h=1.0):
+    """P = p_h (1 - kf_y^2) + (1 - p_h)(1 - kf_z^2) for a beam polarised with fraction p_h along the horizontal lab
+    axis Y (synchrotron: p_h ~ 1) and 1 - p_h along Z; kf = unit exit wavevector of the spot at (q_xy, q_z).
+    Spots inside the missing wedge are evaluated at q_y = 0."""
+    qxy, qz = np.asarray(qxy, float), np.asarray(qz, float)
+    k, a = geom.k, np.radians(geom.alpha_i_deg)
+    qx = (2 * k * np.sin(a) * qz - qxy ** 2 - qz ** 2) / (2 * k * np.cos(a))
+    qy = np.sqrt(np.clip(qxy ** 2 - qx ** 2, 0, None))
+    kfz = ((k * np.cos(a) + qx) * np.sin(a) + (-k * np.sin(a) + qz) * np.cos(a)) / k
+    return p_h * (1 - (qy / k) ** 2) + (1 - p_h) * (1 - kfz ** 2)
 
 
 def hkl_str(h) -> str:

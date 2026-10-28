@@ -1,0 +1,67 @@
+# gixfit phases, 202506 CMS run, R06 = 120 nm rac-BINAP on 22 nm rubrene (5 nm TPTPA), alpha_i = 0.12 deg.
+# Geometry: ITO (222) ring calibration of R5 (same run).  Top crystal rac-BINAP, bottom crystal rubrene.
+out_dir = "../../runs/bilayers_202506/R06_rac-BINAP_on_rubrene"
+
+[image]
+path = "../../../../Rand Lab/Chiao-Jung (Jason) Su/GIWAXS Data/202506 Heterojunction/stitched/YLL_R6_pos1_x0.000_th0.120_10.00s_2020865_waxs_stitched.tiff"
+dead_pixels = [[116, 510], [146, 510]]
+edge = 15
+mask_nonpositive = true
+mask_grow = 2
+qz_min = 0.03
+
+[geometry]
+# ITO (222) ring calibration of R5 (same run; the R6 ring fit is unstable because rac-BINAP rings sit next to it)
+wavelength = 0.9184
+sdd_mm = 258.37
+pixel_mm = 0.172
+x0 = 464.60
+y0 = 646.67
+
+[peaks]
+threshold = 7.0
+s_small = 1.5
+s_large = 8.0
+min_sep = 4
+half = 8
+max_peaks = 300
+min_amp_sigma = 4.0
+
+[fit]
+qmax = 2.0
+q_range = [0.3, 1.85]
+mosaic_deg = 3.0
+min_rel_intensity = 0.003
+n_strong = 20
+merge_tol = 0.008
+tol_schedule = [[0.05, 10.0], [0.03, 6.0], [0.015, 4.0]]
+q_floor = 0.002
+chi_floor_deg = 0.7
+max_strain = 0.06
+max_angle_dev = 5.0
+prior_strain = 0.03
+prior_angle = 3.0
+free_cell = ["a", "b", "c", "beta"]     # rac-BINAP is monoclinic; rubrene's beta is held near 90 by the prior
+
+[multi]
+max_components = 2          # one texture per crystal (a 3rd texture, rubrene (1 -1 0), took 6 spots with 17/20 strong spots missing and rho -0.66: spurious)
+planes_maxidx = 2
+workers = 1
+
+[phases]
+min_I = 0.02                # a crystal claims a spot only if it predicts a reasonably strong reflection there
+
+[plot]
+qxy_lim = [-1.0, 2.0]
+qz_lim = [0.0, 2.0]
+
+[[candidates]]
+name = "rac-BINAP"
+cif = "../../../../Rand Lab/Chiao-Jung (Jason) Su/cif files/BINAP/rac-BINAP - 889725 - XAZGUC.cif"
+contact_planes = "auto"
+
+[[candidates]]
+name = "rubrene"
+cif = "../../../../Rand Lab/Chiao-Jung (Jason) Su/cif files/CMU Rubrene/rubrene_relaxed_PBE+MBD.cif"
+contact_planes = "auto"
+
