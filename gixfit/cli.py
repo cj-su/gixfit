@@ -1,6 +1,7 @@
 """Command line:  python -m gixfit peaks  config.toml     (peak finding only, to tune thresholds)
                 python -m gixfit run    config.toml     (peaks -> CIF error table -> refine -> rank candidates)
                 python -m gixfit multi  config.toml     (several textures / phases per pattern + chance level)
+                python -m gixfit phases config.toml     (two or more crystals: which crystal each spot belongs to)
 """
 from __future__ import annotations
 
@@ -371,12 +372,58 @@ def report_multi(cfg, out, path, D, mask, pk, structs, runs, flags, qlims, mc, t
     print(f"done in {time.time() - t0:.0f} s -> {out}")
 
 
+def cmd_phases(cfg, out):
+    """every [[candidates]] entry is a crystal assumed present (e.g. A and B of a bilayer); fit them jointly and label
+    each detected spot with the crystal(s) that explain it (gixfit.phasemap)."""
+    from .multi import MultiConfig
+    from .phasemap import fit_phases, phase_map, summary, write_csv, phase_map_figure
+    t0 = time.time()
+    out = os.path.join(out, "phases")
+    os.makedirs(out, exist_ok=True)
+    path, D, mask, pk = get_peaks(cfg)
+    gname, geom = geometries(cfg, path)[0]
+    fc = FitConfig.from_dict(cfg.get("fit", {}))
+    md = dict(cfg.get("multi", {}))
+    md.pop("models", None)
+    md.setdefault("max_components", len(cfg["candidates"]) + 1)
+    md["n_null"] = 0
+    mc = MultiConfig.from_dict(md)
+    pl = cfg.get("plot", {})
+    qlims = (tuple(pl.get("qxy_lim", (-0.6, 2.0))), tuple(pl.get("qz_lim", (0.0, 2.0))))
+    structs = [load_structure(c, cfg["_base"]) for c in cfg["candidates"]]
+    planes = [low_index_planes(mc.planes_maxidx) if c.get("contact_planes", "auto") == "auto"
+              else [tuple(p) for p in c["contact_planes"]] for c in cfg["candidates"]]
+    print(f"[{gname}] crystals: {' + '.join(s.name for s in structs)}", flush=True)
+    res, hist, forced = fit_phases(structs, geom, pk, mask, fc, mc, planes, log=lambda s: print(s, flush=True))
+    rows = phase_map(res, pk, min_I=cfg.get("phases", {}).get("min_I", 0.02))
+    write_csv(rows, os.path.join(out, "phase_map.csv"))
+    phase_map_figure(D, mask, res, pk, rows, os.path.join(out, "phase_map.png"), *qlims)
+    cnt = summary(rows)
+    lines = [f"image: {path}", f"geometry: {gname}", f"model: {res.label()}",
+             f"phases added by force (assumed present, not established by the data): {forced or 'none'}", ""]
+    for cm in res.comp_metrics:
+        lines.append(f"{cm['phase']} {cm['contact']}: {cm['n_match']} spots indexed, strong predicted spots missing "
+                     f"{cm['n_strong_missing']}/{cm['n_strong_pred']}, intensity rank corr {cm['spearman_I']:.2f}")
+    for ph, cell, err in zip(res.phase_names, res.cells, res.cell_errs):
+        if cell is not None:
+            lines.append(f"  {ph} refined {cell}")
+    lines += ["", "spot labels (count, sqrt(area)-weighted share of the detected intensity):"]
+    for lab, d in sorted(cnt.items(), key=lambda t: -t[1]["n"]):
+        lines.append(f"  {lab:30s} {d['n']:4d}   {100 * d['w']:5.1f} %")
+    lines += ["", "label 'A + B' = both crystals predict a spot there (shared / ambiguous); 'unassigned' = neither.",
+              f"done in {time.time() - t0:.0f} s"]
+    txt = "\n".join(lines)
+    with open(os.path.join(out, "phase_map_summary.txt"), "w", encoding="utf-8") as fh:
+        fh.write(txt + "\n")
+    print(txt)
+
+
 def main(argv=None):
     if (argv if argv is not None else sys.argv[1:])[:1] == ["app"]:
         from .app import main as app_main
         return app_main()
     ap = argparse.ArgumentParser(prog="gixfit", description="'python -m gixfit app' opens the desktop app")
-    ap.add_argument("command", choices=["peaks", "run", "multi"])
+    ap.add_argument("command", choices=["peaks", "run", "multi", "phases"])
     ap.add_argument("config")
     ap.add_argument("--out", default=None)
     a = ap.parse_args(argv)
@@ -389,6 +436,8 @@ def main(argv=None):
         cmd_peaks(cfg, out)
     elif a.command == "multi":
         cmd_multi(cfg, out)
+    elif a.command == "phases":
+        cmd_phases(cfg, out)
     else:
         cmd_run(cfg, out)
 

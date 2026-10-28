@@ -66,7 +66,8 @@ for 2–3 textures); Identify ≈ 1 min per library CIF for the screen plus the 
 python -m gixfit peaks examples/npb_R1x1_th010.toml     # tune peak detection, look at runs/.../peaks_map.png
 python -m gixfit run   examples/npb_R1x1_th010.toml     # single texture: every candidate x contact plane
 python -m gixfit multi examples/npb_R1x1_th010.toml     # several textures / phases per pattern -> <out_dir>/multi/
-python tests/test_core.py ; python tests/test_synthetic.py ; python tests/test_multi.py
+python -m gixfit phases examples/rac_on_rubrene_r6.toml # crystals A and B: which crystal each spot belongs to
+python tests/test_core.py ; python tests/test_synthetic.py ; python tests/test_multi.py ; python tests/test_phasemap.py
 python tests/test_app_gui.py       # opens the app window and presses every button (~6 min)
 ```
 Config (TOML): `[image]`, `[geometry]` + `[[geometry_variants]]`, `[peaks]`, `[fit]`, `[null]`, `[multi]`, `[[candidates]]`.
@@ -112,6 +113,26 @@ Films often contain several orientations (contact planes) or phases.  `multi.py`
 `models` (default: each candidate alone; `[["A", "B"]]` = phases A and B coexisting).
 Outputs in `<out_dir>/multi/`: `summary_multi.txt`, `gixfit_multi.xlsx` (models_by_k, components, cells, pairs),
 `multi_fit_*.png` (component-coloured overlay), `fom_vs_k_*.png` (data vs chance bands), refined CIFs.
+
+## Which crystal does each spot belong to? (`python -m gixfit phases`)
+For a pattern that contains two (or more) known crystals, e.g. a bilayer "A on B" or two coexisting polymorphs: list
+each crystal as a `[[candidates]]` entry.  gixfit fits them jointly (each crystal its own refined cell and contact
+plane(s), one shared assignment) and labels **every** detected spot (`gixfit/phasemap.py`):
+
+| label | meaning |
+|---|---|
+| `A` | only crystal A predicts a spot there (at its refined cell) |
+| `A + B` | both crystals predict a spot there: shared / ambiguous; `assigned_phase` says which one the fit used and `share_A`, `share_B` the predicted intensity split |
+| `unassigned` | neither crystal predicts a spot there (another phase, substrate, artefact) |
+
+Every listed crystal gets at least one texture: if the greedy fit leaves one out (a large organic cell can absorb the
+other crystal's spots), it is added with its best contact plane and the spots are re-assigned; `phase_map_summary.txt`
+lists such crystals as *forced*, i.e. assumed by you, not established by the data.  A crystal claims a spot only if it
+predicts a reasonably strong reflection there (`[phases] min_I`, default 0.02 of its 10th strongest reflection).
+Outputs in `<out_dir>/phases/`: `phase_map.png` (spots coloured by crystal; yellow = shared, grey = none),
+`phase_map.csv` (one row per spot: q, χ, d, label, hkl in each crystal, intensity shares), `phase_map_summary.txt`.
+Test: `tests/test_phasemap.py` (NPB (101) + α-MoO3 (010) + junk spots: both contact planes found, 48/50 spots labelled
+correctly; the 2 errors are MoO3 spots next to an NPB reflection, where MoO3 had only 6 spots to refine its cell).
 
 ## Validation
 * `tests/test_core.py`: d-spacings of the published NPB cell match the handoff list to 0.002 Å; pixel→q→pixel round trip
