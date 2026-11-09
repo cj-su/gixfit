@@ -11,12 +11,12 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gixfit.crystal import Cell, read_aims, PARAM_NAMES
+from gixfit.crystal import Cell, read_cif, PARAM_NAMES
 from gixfit.geometry import Geometry
 from gixfit.peaks import PeakTable
 from gixfit.fit import FitConfig
 from gixfit.multi import MultiConfig, decompose, null_test_multi
-from test_synthetic import make_peaks, AIMS, PUB
+from test_synthetic import make_peaks, AIMS, PUB, require_npb
 
 
 def concat(*tables):
@@ -25,8 +25,9 @@ def concat(*tables):
 
 
 def main(run_null=True):
+    require_npb()
     t0 = time.time()
-    st = read_aims(AIMS, drop=("Mo", "O")).with_cell(PUB)
+    st = read_cif(AIMS).with_cell(PUB)
     st.name = "NPB"
     true = Cell(10.3077 * 1.015, 11.3545 * 0.99, 14.4778 * 1.005, 82.339 + 0.8, 77.657 - 1.2, 75.526 + 0.5)
     geom = Geometry(x0=577, y0=643, alpha_i_deg=0.1)

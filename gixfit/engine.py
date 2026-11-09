@@ -23,6 +23,7 @@ import glob
 import os
 import re
 import time
+from copy import deepcopy
 from dataclasses import dataclass, field, asdict, replace
 
 import numpy as np
@@ -65,10 +66,32 @@ class Settings:
     # model search / chance level
     max_textures: int = 1
     planes_maxidx: int = 2
-    n_null: int = 10
+    n_null: int = 0                      # optional descriptive diagnostics
+    seed: int = 0
     null_modes: tuple = ("chi", "q")
     workers: int = 0
     identify_null_top: int = 3              # identify: chance test only for the best N library entries
+
+    def validate(self) -> None:
+        for name in ("wavelength", "sdd_mm", "pixel_mm", "threshold", "mosaic_deg"):
+            if not np.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be a finite positive number.")
+        for name in ("x0", "y0", "q_min", "q_max"):
+            if not np.isfinite(getattr(self, name)):
+                raise ValueError(f"{name} must be finite.")
+        if not 0 <= self.q_min < self.q_max:
+            raise ValueError("The q range must satisfy 0 <= q min < q max.")
+        if self.alpha_i_deg is not None and not 0 < self.alpha_i_deg < 90:
+            raise ValueError("Incident angle must be between 0 and 90 degrees.")
+        if self.alpha_c_deg is not None and not 0 <= self.alpha_c_deg < 90:
+            raise ValueError("Critical angle must be between 0 and 90 degrees.")
+        if self.n_null < 0 or self.max_textures < 1 or self.planes_maxidx < 1:
+            raise ValueError("Invalid diagnostic count, texture count or plane range.")
+
+    def detection_settings(self) -> dict:
+        names = ("wavelength", "sdd_mm", "pixel_mm", "x0", "y0", "alpha_i_deg", "alpha_c_deg",
+                 "qz_min", "edge", "dead_pixels", "mask_rects", "threshold", "min_amp_sigma", "max_peaks")
+        return {name: deepcopy(getattr(self, name)) for name in names}
 
     def geometry(self, image_path=None) -> Geometry:
         ai = self.alpha_i_deg
@@ -83,7 +106,7 @@ class Settings:
 
     def multi_config(self, **kw) -> MultiConfig:
         mc = MultiConfig(max_components=self.max_textures, planes_maxidx=self.planes_maxidx, n_null=self.n_null,
-                         null_modes=tuple(self.null_modes), workers=self.workers)
+                         null_modes=tuple(self.null_modes), workers=self.workers, seed=self.seed)
         return replace(mc, **kw)
 
     # ---- persistence (simple TOML, readable by `python -m gixfit` configs as well)
@@ -102,7 +125,8 @@ class Settings:
                 lines.append(f"{k} = {'true' if v else 'false'}")
             else:
                 lines.append(f"{k} = {v}")
-        open(path, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+        with open(path, "w", encoding="utf-8") as stream:
+            stream.write("\n".join(lines) + "\n")
 
     @classmethod
     def from_toml(cls, path, variant=None):
@@ -116,6 +140,8 @@ class Settings:
                 if hasattr(s, k):
                     setattr(s, k, tuple(v) if k == "null_modes" else v)
             img = c.get("app", {}).get("image", "")
+            if img and not os.path.isabs(img):
+                img = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(path)), img))
             return s, img, []
         g = dict(c.get("geometry", {}))
         variants = c.get("geometry_variants", [])
@@ -159,7 +185,12 @@ class Session:
     """one image + settings: raw data, mask and detected spots."""
 
     def __init__(self, image_path, settings: Settings, log=None):
-        self.path, self.s = image_path, settings
+        settings = deepcopy(settings)
+        settings.validate()
+        self.path, self.s = os.path.abspath(image_path), settings
+        self.input_settings = settings.detection_settings()
+        from .replay import checksum
+        self.image_sha256 = checksum(self.path)
         log = log or (lambda *_: None)
         t0 = time.time()
         self.D = load_image(image_path, dead_pixels=[tuple(p) for p in settings.dead_pixels])
@@ -171,12 +202,24 @@ class Session:
         self.mask = mask
         self.peaks = find_peaks(self.D, mask, threshold=settings.threshold, min_amp_sigma=settings.min_amp_sigma,
                                 max_peaks=settings.max_peaks)
+        if checksum(self.path) != self.image_sha256:
+            raise ValueError("Image changed during spot detection. Please run Find spots again.")
         log(f"{len(self.peaks)} spots found in {time.time() - t0:.1f} s "
             f"({self.n_used()} within q = {settings.q_min}-{settings.q_max} A^-1 are used for matching)")
 
     def q(self):
         qxy, qz = self.geom.pixel_to_q(self.peaks.col, self.peaks.row)
         return qxy, qz, np.hypot(qxy, qz), np.degrees(np.arctan2(qxy, qz))
+
+    def matches_inputs(self, image_path: str, settings: Settings) -> bool:
+        from .replay import checksum
+        if (os.path.normcase(os.path.abspath(image_path)) != os.path.normcase(self.path)
+                or self.input_settings != settings.detection_settings()):
+            return False
+        try:
+            return checksum(self.path) == self.image_sha256
+        except OSError:
+            return False
 
     def n_used(self):
         q = self.q()[2]
@@ -253,6 +296,7 @@ class Evaluation:
     z_q: float
     cell_only: bool
     seconds: float
+    recipe: dict = field(default_factory=dict)
 
     def summary_line(self):
         m = self.best.metrics if self.best else {}
@@ -268,6 +312,7 @@ def _short(path):
 def load_cif(path) -> Structure:
     st = read_cif(path)
     st.name = _short(path)
+    st.path = os.path.abspath(path)
     return st
 
 
@@ -294,7 +339,11 @@ def _grade(k_sig, fom, tested, z_chi=np.nan, z_q=np.nan):
 
 def evaluate(session: Session, struct: Structure, settings: Settings = None, contact=None, with_null=True,
              log=None, max_textures=None) -> Evaluation:
-    s = settings or session.s
+    s = deepcopy(settings or session.s)
+    struct = deepcopy(struct)
+    s.validate()
+    if not session.matches_inputs(session.path, s):
+        raise ValueError("Image geometry or detection settings changed; find spots again before fitting.")
     log = log or (lambda *_: None)
     t0 = time.time()
     fc = replace(s.fit_config(), free_cell=free_cell_for(struct))
@@ -318,13 +367,16 @@ def evaluate(session: Session, struct: Structure, settings: Settings = None, con
     grade, verdict = _grade(k_sig, fom, bool(null), zc, zq)
     ev = Evaluation(struct.name, struct.name, struct, hist, null, k_sig, best, verdict, grade, fom, zc, zq,
                     not struct.has_atoms, time.time() - t0)
+    ev.recipe = dict(settings=asdict(s), contact=list(contact) if contact is not None else None,
+                     with_null=with_null, max_textures=max_textures,
+                     fit_config=asdict(fc), multi_config=asdict(mc))
     log(f"  => {ev.summary_line()}  ({ev.seconds:.0f} s)")
     return ev
 
 
 def _rank(evs):
-    order = {"both": 0, "chi": 1, "q": 2, "untested": 3, "neither": 4}
-    return sorted(evs, key=lambda e: (order[e.grade], -e.fom))
+    # Diagnostics describe surrogate behaviour; they are not evidence of identity.
+    return sorted(evs, key=lambda e: -e.fom if np.isfinite(e.fom) else float("inf"))
 
 
 def same_pattern_pairs(structs, qmax=2.0, tol=0.999):
@@ -397,7 +449,7 @@ def identify(session: Session, library_dirs, settings=None, exclude=r"slab|vacuu
     log(f"Chance test for the top {len(top)}: " + ", ".join(e.name for e in top))
     full = [evaluate(session, e.struct, s, None, True, log) for e in top]
     rest = screen[len(top):]
-    return _rank(full) + rest, flags, failed
+    return _rank(full + rest), flags, failed
 
 
 # ---------------------------------------------------------------------- export
@@ -406,6 +458,8 @@ def export(session: Session, evs, flags, out_dir, log=None):
     from . import plots
     log = log or (lambda *_: None)
     os.makedirs(out_dir, exist_ok=True)
+    from .replay import write_manifest
+    write_manifest(session, evs, flags, out_dir)
     rows, pair_tables = [], {}
     for i, e in enumerate(evs):
         m = e.best.metrics if e.best else {}
@@ -431,6 +485,9 @@ def export(session: Session, evs, flags, out_dir, log=None):
             "outcome: which supplementary surrogate diagnostics were passed (standardized surrogate score z >= 3 "
             "against observable chi reassignments and against |q| jittered by +-3%); a descriptive outcome, not an "
             "identification of the structure.",
+            "Ranking is by FOM, not surrogate diagnostic outcome. Compare fits made with the same settings.",
+            "Cell errors are local curvature estimates conditional on assignments, priors and geometry; "
+            "they are not validated confidence intervals or total calibration uncertainties.",
             "fom = (indexed fraction of spot intensity) x (1 - fraction of the strongest predicted spots that are absent)",
             "dq_cif_pct = (q_obs - q_CIF)/q_CIF per spot (the CIF error); dq_fit_pct after refining the cell",
             f"indistinguishable pairs (same diffraction, e.g. R/S enantiomers): {flags or 'none'}"]}).to_excel(

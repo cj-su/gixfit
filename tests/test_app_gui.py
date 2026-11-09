@@ -1,6 +1,6 @@
 """Scripted end-to-end run of the desktop app (opens the window, presses the buttons, closes it).
 
-python tests/test_app_gui.py [out_dir]          (~10 min: identify screens the whole CIF library)
+python tests/test_app_gui.py [out_dir]          (portable synthetic tutorial; diagnostics off)
 """
 import os, sys, time
 
@@ -20,6 +20,7 @@ def main():
     for name in ("showerror", "showinfo"):          # never block on a dialog
         setattr(messagebox, name, lambda *a, _n=name, **k: msgs.append((_n, a)))
     root = tk.Tk()
+    root.withdraw()
     app = A.App(root)
 
     def wait(label):
@@ -30,19 +31,35 @@ def main():
         root.update()
         print(f"{label}: {time.time() - t0:.0f} s | status: {app.v_status.get()}", flush=True)
 
-    s, img, variants = Settings.from_toml(os.path.join(ROOT, "examples", "npb_R1x1_th010.toml"), variant=1)
+    from gixfit.demo import create_demo
+    img, candidate, s = create_demo(out)
     app.settings = s
     app._fill_fields(s)
     app.v_image.set(img)
     app._run_find(); wait("Find spots")
-    assert app.session is not None and len(app.session.peaks) > 50, msgs
+    assert app.session is not None and len(app.session.peaks) > 20, msgs
     app.fig.savefig(os.path.join(out, "01_spots.png"), dpi=110)
 
-    npb = os.path.join(ROOT, "library", "NPB_published_cell_DFT_atoms.cif")
-    moo3 = os.path.join(ROOT, "library", "MoO3_alpha_Pbnm_Kihlborg1963_COD9014282.cif")
-    app.v_chance.set("Quick (6 surrogates)")
-    app.v_cif.set(npb); app.v_contact.set("1 0 1")
-    app._run_check(); wait("Check one CIF (NPB, contact 1 0 1)")
+    # Visible geometry changes must block fitting and must not mutate the existing session.
+    old_x = app.session.geom.x0
+    app.vars["x0"].set(str(old_x + 2))
+    assert app._apply_options() is None
+    assert app.session.geom.x0 == old_x and app.session.s.x0 == old_x
+    app.vars["x0"].set(str(old_x))
+    app.v_image.set(img + ".other")
+    assert app._apply_options() is None
+    app.v_image.set(img)
+    assert app._apply_options() is not None
+    msgs.clear()  # expected stale-input notices
+    npb = candidate
+    from gixfit.crystal import read_cif, write_cif, Cell
+    model = read_cif(candidate)
+    p = model.cell.array(); p[:3] *= 1.15
+    moo3 = os.path.join(os.path.dirname(candidate), "wrong_candidate.cif")
+    write_cif(model.with_cell(Cell.from_array(p)), moo3, "Wrong tutorial cell")
+    app.v_chance.set("Off (fast fit)")
+    app.v_cif.set(npb); app.v_contact.set("1 0 0")
+    app._run_check(); wait("Check tutorial CIF (contact 1 0 0)")
     assert app.evals and app.evals[0].best is not None, msgs
     app._show_selected(); root.update()
     print("   ", app.evals[0].summary_line())
@@ -57,6 +74,8 @@ def main():
         print("   ", e.summary_line())
     app.fig.savefig(os.path.join(out, "03_compare.png"), dpi=110)
 
+    app.lb_lib.delete(0, "end")
+    app.lb_lib.insert("end", os.path.dirname(candidate))
     app.v_top.set("2")
     app._run_identify(); wait("Identify (library)")
     assert app.evals, msgs
@@ -69,6 +88,7 @@ def main():
     export(app.session, app.evals, app.flags, os.path.join(out, "report"))
     print("report files:", sorted(os.listdir(os.path.join(out, "report")))[:8], "...")
     print("dialogs that would have popped up:", msgs or "none")
+    assert not msgs, msgs
     root.destroy()
     print("APP END-TO-END OK")
 

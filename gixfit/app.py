@@ -11,6 +11,7 @@ import os
 import queue
 import threading
 import traceback
+from copy import deepcopy
 
 import numpy as np
 import tkinter as tk
@@ -30,7 +31,6 @@ from .crystal import PARAM_NAMES
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_LIBS = [p for p in (
     os.path.join(HERE, "library"),
-    os.path.normpath(os.path.join(HERE, "..", "..", "Rand Lab", "Chiao-Jung (Jason) Su", "cif files")),
 ) if os.path.isdir(p)]
 
 FIELDS = [  # (attribute, label, kind)
@@ -45,7 +45,7 @@ class _Canvas(FigureCanvasTkAgg):
         pass
 
 
-CHANCE = {"Quick (6 surrogates)": 6, "Standard (12)": 12, "Thorough (24)": 24, "Off (no diagnostics)": 0}
+CHANCE = {"Off (fast fit)": 0, "Preview (6; unstable)": 6, "Standard (100)": 100, "Extended (200)": 200}
 
 
 class App:
@@ -84,6 +84,7 @@ class App:
         fr.grid(row=2, column=0, columnspan=3, sticky="we", pady=(4, 2))
         ttk.Button(fr, text="Load settings...", command=self._load_settings).pack(side="left")
         ttk.Button(fr, text="Save settings...", command=self._save_settings).pack(side="left", padx=4)
+        ttk.Button(fr, text="Try demo...", command=self._open_demo).pack(side="left")
         self.v_variant = tk.StringVar()
         self.cb_variant = ttk.Combobox(fr, textvariable=self.v_variant, width=18, state="readonly")
         self.cb_variant.pack(side="left")
@@ -105,8 +106,8 @@ class App:
         ttk.Label(fo, text="Contact planes up to index").grid(row=1, column=0, sticky="w")
         self.v_maxidx = tk.StringVar(value="2")
         ttk.Spinbox(fo, from_=1, to=3, textvariable=self.v_maxidx, width=5).grid(row=1, column=1, sticky="w")
-        ttk.Label(fo, text="Chance test").grid(row=2, column=0, sticky="w")
-        self.v_chance = tk.StringVar(value="Quick (6 surrogates)")
+        ttk.Label(fo, text="Optional diagnostics").grid(row=2, column=0, sticky="w")
+        self.v_chance = tk.StringVar(value="Off (fast fit)")
         ttk.Combobox(fo, textvariable=self.v_chance, values=list(CHANCE), state="readonly",
                      width=20).grid(row=2, column=1, sticky="w")
 
@@ -115,7 +116,7 @@ class App:
         nb.pack(fill="both", expand=True)
         # identify
         t1 = ttk.Frame(nb, padding=6)
-        nb.add(t1, text="Identify")
+        nb.add(t1, text="Search library")
         ttk.Label(t1, text="CIF library folders (searched recursively)").pack(anchor="w")
         self.lb_lib = tk.Listbox(t1, height=4)
         self.lb_lib.pack(fill="x")
@@ -127,14 +128,14 @@ class App:
         ttk.Label(t1, text="Skip files matching (regex)").pack(anchor="w")
         self.v_excl = tk.StringVar(value="slab|vacuum")
         ttk.Entry(t1, textvariable=self.v_excl).pack(fill="x")
-        ttk.Label(t1, text="Top N get the chance test").pack(anchor="w")
+        ttk.Label(t1, text="Top N receive optional diagnostics").pack(anchor="w")
         self.v_top = tk.StringVar(value="3")
         ttk.Spinbox(t1, from_=1, to=20, textvariable=self.v_top, width=5).pack(anchor="w")
-        self.b_ident = ttk.Button(t1, text="Identify structure", command=self._run_identify)
+        self.b_ident = ttk.Button(t1, text="Rank candidate CIFs", command=self._run_identify)
         self.b_ident.pack(fill="x", pady=6)
         ttk.Label(t1, wraplength=330, foreground="#555", justify="left",
-                  text="Finds which structure in your library explains the pattern. It cannot solve a structure "
-                       "that is not in the library.").pack(anchor="w")
+                  text="Ranks supplied candidates by fit quality. A top-ranked candidate is not a confirmed "
+                       "structure identification.").pack(anchor="w")
         # check one
         t2 = ttk.Frame(nb, padding=6)
         nb.add(t2, text="Check one CIF")
@@ -240,9 +241,17 @@ class App:
         for attr, _, _ in FIELDS:
             v = getattr(s, attr)
             self.vars[attr].set("" if v is None else f"{v:g}")
+        self.v_tex.set(str(s.max_textures))
+        self.v_maxidx.set(str(s.planes_maxidx))
+        self.v_top.set(str(s.identify_null_top))
+        label = next((k for k, v in CHANCE.items() if v == s.n_null), None)
+        if label is None:
+            label = f"Custom ({s.n_null})"
+            CHANCE[label] = s.n_null
+        self.v_chance.set(label)
 
     def _read_fields(self) -> Settings:
-        s = self.settings
+        s = deepcopy(self.settings)
         for attr, label, kind in FIELDS:
             txt = self.vars[attr].get().strip()
             if txt == "" and attr in ("alpha_i_deg",):
@@ -256,7 +265,25 @@ class App:
         s.planes_maxidx = int(self.v_maxidx.get())
         s.n_null = CHANCE[self.v_chance.get()]
         s.identify_null_top = int(self.v_top.get())
+        s.validate()
         return s
+
+    def _open_demo(self):
+        if self.busy:
+            messagebox.showinfo("gixfit", "Wait for the current task to finish.")
+            return
+        folder = filedialog.askdirectory(title="Choose a folder for the synthetic tutorial")
+        if not folder:
+            return
+        from .demo import create_demo
+        image, cif, settings = create_demo(folder)
+        self.settings = settings
+        self._fill_fields(settings)
+        self.v_image.set(image)
+        self.v_cif.set(cif)
+        self.v_contact.set("auto")
+        self.v_status.set("Synthetic tutorial loaded. Press Find spots, then Check one CIF > Check match.")
+        self._log("Synthetic tutorial only; not experimental validation. Geometry is supplied for this demo.")
 
     def _browse_image(self):
         p = filedialog.askopenfilename(title="GIWAXS image", filetypes=[("TIFF", "*.tif *.tiff"), ("all", "*.*")])
@@ -373,6 +400,7 @@ class App:
             s = self._read_fields()
         except ValueError as e:
             messagebox.showerror("gixfit", str(e)); return
+        self.settings = deepcopy(s)
         self._start("Find spots", lambda: Session(img, s, log=self._logq))
 
     def _apply_options(self):
@@ -381,14 +409,12 @@ class App:
         except ValueError as e:
             messagebox.showerror("gixfit", str(e)); return None
         # geometry / spot settings changed since 'Find spots'?  -> the spots must be found again
-        ses = self.session.s
-        for attr, _, _ in FIELDS:
-            if getattr(ses, attr) != getattr(s, attr):
-                messagebox.showinfo("gixfit", "Detector or spot settings changed: press 'Find spots' again.")
-                return None
-        ses.max_textures, ses.planes_maxidx = s.max_textures, s.planes_maxidx
-        ses.n_null, ses.identify_null_top = s.n_null, s.identify_null_top
-        return ses
+        if not self.session.matches_inputs(self.v_image.get().strip(), s):
+            self.v_status.set("Results are stale: image or detection settings changed. Find spots again.")
+            messagebox.showinfo("gixfit", "Image, geometry or spot settings changed: press 'Find spots' again.")
+            return None
+        self.settings = deepcopy(s)
+        return s
 
     def _run_check(self):
         if not self._need_session():
@@ -437,6 +463,13 @@ class App:
     def _export(self):
         if not self.session:
             messagebox.showinfo("gixfit", "Nothing to export yet."); return
+        s = self._apply_options()
+        if s is None:
+            return
+        from dataclasses import asdict
+        if any(e.recipe.get("settings") != asdict(s) for e in self.evals):
+            messagebox.showinfo("gixfit", "Fit options changed. Run the fit again before exporting.")
+            return
         d = filedialog.askdirectory(title="Folder for the report")
         if d:
             ses, evs, flags = self.session, list(self.evals), list(self.flags)
@@ -452,7 +485,7 @@ class App:
             self._log("Structure hints (no CIF needed):")
             for h in res.hints():
                 self._log("  " + h)
-            self.v_status.set(f"{len(res.peaks)} spots. Now choose Identify / Check one CIF / Compare CIFs.")
+            self.v_status.set(f"{len(res.peaks)} spots. Check one CIF, compare CIFs, or search your library.")
             self._draw()
             self.nb_out.select(2)
         elif name == "Export":
@@ -522,7 +555,8 @@ class App:
             self._log("  " + "  ".join(f"{n:>6s}" for n in PARAM_NAMES))
             self._log("  CIF     " + " ".join(f"{v:8.3f}" for v in c0))
             self._log("  refined " + " ".join(f"{v:8.3f}" for v in c1))
-            self._log("  +-      " + " ".join(f"{v:8.3f}" for v in ce))
+            self._log("  local curvature errors " + " ".join(f"{v:8.3f}" for v in ce))
+            self._log("  Errors condition on assignments, priors and geometry; calibration uncertainty is not included.")
             for mode, per_k in (e.null or {}).items():
                 for d in per_k:
                     self._log(f"  chance [{mode}] k={d['k']}: fom {d['fom']:.3f} vs {d['null_mean']:.3f} +- "

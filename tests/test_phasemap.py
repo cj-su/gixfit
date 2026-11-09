@@ -10,20 +10,21 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gixfit.crystal import Cell, read_aims, read_cif
+from gixfit.crystal import Cell, read_cif
 from gixfit.geometry import Geometry
 from gixfit.fit import FitConfig
 from gixfit.multi import MultiConfig
 from gixfit.phasemap import fit_phases, phase_map, summary, UNASSIGNED
-from test_synthetic import make_peaks, AIMS, PUB
+from test_synthetic import make_peaks, AIMS, PUB, require_npb
 from test_multi import concat
 
 MOO3 = os.path.join(ROOT, "library", "MoO3_alpha_Pbnm_Kihlborg1963_COD9014282.cif")
 
 
 def main():
+    require_npb()
     t0 = time.time()
-    A = read_aims(AIMS, drop=("Mo", "O")).with_cell(PUB); A.name = "NPB"
+    A = read_cif(AIMS).with_cell(PUB); A.name = "NPB"
     B = read_cif(MOO3); B.name = "MoO3"
     trueA = Cell(10.3077 * 1.012, 11.3545 * 0.992, 14.4778 * 1.004, 82.339 + 0.6, 77.657 - 0.8, 75.526 + 0.4)
     b0 = B.cell

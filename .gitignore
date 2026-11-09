@@ -23,3 +23,9 @@ examples/worked_example_log.txt
 
 # Office lock files
 ~$*
+
+# Local backups made by revision tools
+backups/
+
+# Presentation decks (contain figures from unpublished data)
+slides/

@@ -8,14 +8,21 @@ import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from gixfit.crystal import Cell, read_aims, PARAM_NAMES
+from gixfit.crystal import Cell, read_cif, PARAM_NAMES
 from gixfit.geometry import Geometry
 from gixfit.pattern import fiber_pattern, group_reflections, group_intensity
 from gixfit.peaks import PeakTable
 from gixfit.fit import FitConfig, Problem
 
-AIMS = os.path.join(os.path.dirname(ROOT), "giwaxs_20260831 NPB MoO3", "reference_dft", "geometry_009_original.in")
+AIMS = os.path.join(ROOT, "library", "NPB_published_cell_DFT_atoms.cif")
 PUB = Cell(10.3077, 11.3545, 14.4778, 82.339, 77.657, 75.526)
+
+
+def require_npb():
+    """The NPB test structure is collaborator-derived and not in the public repository: skip, don't fail."""
+    if not os.path.exists(AIMS):
+        print(f"SKIP: {os.path.relpath(AIMS, ROOT)} is not distributed with the repository.")
+        sys.exit(0)
 
 
 def make_peaks(struct, contact, geom, shape, n_strong=45, n_spurious=15, noise_px=0.3, seed=1):
@@ -41,7 +48,8 @@ def make_peaks(struct, contact, geom, shape, n_strong=45, n_spurious=15, noise_p
 
 
 def main():
-    st = read_aims(AIMS, drop=("Mo", "O")).with_cell(PUB)
+    require_npb()
+    st = read_cif(AIMS).with_cell(PUB)
     true = Cell(10.3077 * 1.015, 11.3545 * 0.99, 14.4778 * 1.005, 82.339 + 0.8, 77.657 - 1.2, 75.526 + 0.5)
     geom = Geometry(x0=577, y0=643, alpha_i_deg=0.1)
     shape = (1043, 981)

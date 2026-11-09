@@ -59,7 +59,7 @@ def test_vs_legacy():
 def test_structure_factor_vs_pymatgen():
     from pymatgen.core import Structure as PS
     from pymatgen.analysis.diffraction.xrd import XRDCalculator
-    cif = os.path.join(NPB_DIR, "reference_cif", "MoO3_alpha_Pbnm_Kihlborg1963_COD9014282.cif")
+    cif = os.path.join(ROOT, "library", "MoO3_alpha_Pbnm_Kihlborg1963_COD9014282.cif")
     st = read_cif(cif, b_iso=0.0)
     ps = PS.from_file(cif)
     pat = XRDCalculator(wavelength=0.9184).get_pattern(ps, two_theta_range=(5, 40))
