@@ -56,17 +56,36 @@ def positive_values(img):
     return v[v > 0]
 
 
+def visible(qgrid, opts: FigureOptions):
+    """pixels of the q-grid inside the requested q range (so the contrast never depends on a larger cached grid)."""
+    qxy, qz, img = qgrid
+    cx = (qxy >= opts.qxy_lim[0]) & (qxy <= opts.qxy_lim[1])
+    cz = (qz >= opts.qz_lim[0]) & (qz <= opts.qz_lim[1])
+    return img[np.ix_(cz, cx)]
+
+
 def limits(img, opts: FigureOptions):
-    """(vmin, vmax) actually used: explicit values win over percentiles; always vmin < vmax and > 0 for log."""
+    """(vmin, vmax) of the colour bar.  Typed values are used exactly as given; missing ones come from percentiles of
+    the positive pixels of `img` (pass only the visible region, see visible()).  Raises ValueError for limits that
+    cannot be drawn (non-finite, vmin >= vmax, or <= 0 on a log scale) instead of silently changing them."""
+    for name in ("vmin", "vmax", "lo_pct", "hi_pct"):
+        x = getattr(opts, name)
+        if x is not None and not np.isfinite(x):
+            raise ValueError(f"{name} must be a finite number.")
+    if not 0 <= opts.lo_pct < opts.hi_pct <= 100:
+        raise ValueError("Percentiles must satisfy 0 <= lower < upper <= 100.")
     v = positive_values(img)
-    if v.size == 0:
-        return 1.0, 10.0
-    lo = opts.vmin if opts.vmin is not None else float(np.percentile(v, opts.lo_pct))
-    hi = opts.vmax if opts.vmax is not None else float(np.percentile(v, opts.hi_pct))
-    if opts.scale == "log":
-        lo = max(lo, float(v.min()), 1e-12)
+    if v.size == 0 and (opts.vmin is None or opts.vmax is None):
+        raise ValueError("No positive pixels in this q range; type both colour-bar limits.")
+    lo = float(opts.vmin) if opts.vmin is not None else float(np.percentile(v, opts.lo_pct))
+    hi = float(opts.vmax) if opts.vmax is not None else float(np.percentile(v, opts.hi_pct))
+    if opts.scale == "log" and lo <= 0:
+        raise ValueError("A log colour bar needs a minimum above 0.")
     if not hi > lo:
-        hi = lo * 1.01 + 1e-12
+        if opts.vmin is None and opts.vmax is None:        # flat image: widen around the single value
+            lo, hi = (lo / 1.1, lo * 1.1) if lo > 0 else (lo - 1, lo + 1)
+        else:
+            raise ValueError(f"The colour-bar maximum ({hi:.4g}) must exceed the minimum ({lo:.4g}).")
     return lo, hi
 
 
@@ -75,7 +94,7 @@ def draw_map(fig: Figure, session, evaluation, opts: FigureOptions, qgrid=None):
     fig.clear()
     qgrid = qgrid_for(session, opts, qgrid)
     qxy, qz, img = qgrid
-    lo, hi = limits(img, opts)
+    lo, hi = limits(visible(qgrid, opts), opts)
     norm = LogNorm(lo, hi) if opts.scale == "log" else Normalize(lo, hi)
     ax = fig.add_subplot(111)
     data = np.clip(img, lo, None) if opts.scale == "log" else img
@@ -120,7 +139,13 @@ def log_ticks(lo, hi, n_max=7):
             return t
     if len(t) > n_max:
         return t[::int(np.ceil(len(t) / n_max))]
-    return [float(f"{x:.2g}") for x in np.geomspace(lo, hi, 4)]       # narrow range: rounded geometric steps
+    # narrow range: geometric steps rounded to the fewest digits that keep them distinct and inside [lo, hi]
+    for digits in range(2, 8):
+        t = sorted({float(f"{x:.{digits}g}") for x in np.geomspace(lo, hi, 4)})
+        t = [x for x in t if lo <= x <= hi]
+        if len(t) >= 3:
+            return t
+    return [lo, hi]
 
 
 def save_map(path, session, evaluation, opts: FigureOptions = None, qgrid=None):
@@ -183,7 +208,8 @@ def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None):
     e_min.pack(side="left", padx=2)
     ttk.Label(r, text="max").pack(side="left"); e_max = ttk.Entry(r, textvariable=v["vmax"], width=10)
     e_max.pack(side="left", padx=2)
-    ttk.Label(left, text="(type a value + Enter to fix it; sliders release it)", foreground="#555").pack(anchor="w")
+    ttk.Label(left, text="(typed values are used exactly; moving a slider releases them)",
+              foreground="#555").pack(anchor="w")
     r = ttk.Frame(left); r.pack(anchor="w", pady=4)
     ttk.Label(r, text="Scale").pack(side="left")
     ttk.Combobox(r, textvariable=v["scale"], values=("log", "linear"), state="readonly", width=7).pack(side="left", padx=3)
@@ -233,7 +259,12 @@ def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None):
 
     def _num(var, kind=float):
         t = var.get().strip()
-        return None if t == "" else kind(t)
+        if t == "":
+            return None
+        x = kind(t)
+        if not np.isfinite(x):                          # 'nan', 'inf' are parsed by float() but cannot be drawn
+            raise ValueError(f"'{t}' is not a finite number.")
+        return x
 
     def current() -> FigureOptions:
         o = replace(opts, lo_pct=float(v["lo"].get()), hi_pct=float(v["hi"].get()), scale=v["scale"].get(),
@@ -248,6 +279,8 @@ def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None):
             raise ValueError("Width and height must be 0.5-30 inches.")
         if not (o.dpi and 50 <= o.dpi <= 1200):
             raise ValueError("dpi must be 50-1200.")
+        state["qgrid"] = qgrid_for(session, o, state["qgrid"])
+        state["lims"] = limits(visible(state["qgrid"], o), o)    # validates the colour-bar limits before drawing
         return o
 
     def redraw():
@@ -255,10 +288,10 @@ def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None):
         try:
             o = current()
         except (ValueError, TypeError) as e:
-            status.set(str(e)); return
+            status.set(f"Not drawn: {e}"); return
         fig.set_size_inches(o.width_in, o.height_in)
         state["qgrid"] = draw_map(fig, session, evaluation, o, state["qgrid"])
-        lo, hi = limits(state["qgrid"][2], o)
+        lo, hi = state["lims"]
         status.set(f"Colour bar: {lo:.3g} - {hi:.3g} ({o.scale}).  Output {o.width_in:g} x {o.height_in:g} in, "
                    f"{int(o.width_in * o.dpi)} x {int(o.height_in * o.dpi)} px.")
         state["last"] = o
@@ -314,5 +347,5 @@ def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None):
     win.update_idletasks()
     redraw()
     win.state = state                            # for scripted tests
-    win.v, win.redraw, win.current = v, redraw, current
+    win.v, win.redraw, win.current, win.status = v, redraw, current, status
     return win
