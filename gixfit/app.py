@@ -170,6 +170,8 @@ class App:
         # --- bottom of left
         fb = ttk.Frame(left); fb.pack(fill="x", pady=4)
         ttk.Button(fb, text="Export report...", command=self._export).pack(fill="x")
+        ttk.Button(fb, text="Export figure (preview, intensity bar)...",
+                   command=self._export_figure).pack(fill="x", pady=(3, 0))
         self.pb = ttk.Progressbar(fb, mode="indeterminate")
         self.pb.pack(fill="x", pady=4)
         self.v_status = tk.StringVar(value="Load an image and press 'Find spots'.")
@@ -566,7 +568,16 @@ class App:
                       "tested; intensities could not be used.")
 
     # ------------------------------------------------------------------ figure
+    def _export_figure(self):
+        """the map currently shown (with its fit, if a result is selected) -> preview dialog -> file."""
+        if not self.session:
+            messagebox.showinfo("gixfit", "Find spots first; then select a result to include its fit."); return
+        from .figexport import open_dialog
+        self.fig_dialog = open_dialog(self.root, self.session, self._shown_ev, self._qgrid,
+                                      initial_dir=os.path.dirname(self.session.path))
+
     def _draw(self, ev=None):
+        self._shown_ev = ev
         ax = self.ax
         ax.clear()
         if self.session is None:
