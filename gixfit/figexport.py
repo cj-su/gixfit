@@ -30,7 +30,7 @@ class FigureOptions:
     cmap: str = "magma"
     overlay: bool = True                # predicted / indexed / not-indexed spots of the fit
     labels: bool = True                 # hkl labels of the strongest indexed spots
-    n_labels: int | None = 8            # how many indexed spots get an hkl label (strongest first); None = all
+    n_labels: int | None = 8            # labels on the N strongest VISIBLE indexed spots, all components together; None = all
     legend: bool = True
     colorbar: bool = True
     title: str = ""
@@ -285,8 +285,11 @@ def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None, n_lab
     ttk.Separator(left).pack(fill="x", pady=6)
     ttk.Label(left, text="Content", font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
     r = ttk.Frame(left); r.pack(anchor="w")
-    ttk.Label(r, text="hkl labels (strongest indexed spots)").pack(side="left")
+    ttk.Label(r, text="hkl labels").pack(side="left")
     ttk.Combobox(r, textvariable=v["nlab"], values=LABEL_CHOICES, width=6).pack(side="left", padx=3)
+    ttk.Label(left, text="(number of labels: the strongest indexed spots inside the q range, all crystals "
+                         "together; it does not pick particular hkl. 'all' can overlap.)",
+              foreground="#555", wraplength=330, justify="left").pack(anchor="w")
     for key, text in (("overlay", "Fit overlay (predicted / indexed / not indexed)"),
                       ("legend", "Legend"), ("colorbar", "Colour bar")):
         ttk.Checkbutton(left, text=text, variable=v[key], command=lambda: schedule()).pack(anchor="w")

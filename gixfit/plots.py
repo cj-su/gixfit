@@ -83,13 +83,15 @@ def fit_figure(D, mask, res, peaks, path, qxy_lim=(-0.6, 2.0), qz_lim=(0.0, 2.0)
             ux, uz = geom.pixel_to_q(peaks.col[res.unmatched_obs], peaks.row[res.unmatched_obs])
             ax.plot(ux, uz, "x", color="#ffd400", ms=6, mew=1.3)
         # labels for the strongest matched
-        top = sorted(res.pairs, key=lambda r: -r["I_pred"])[:label_top]
-        for p in top:
+        vis = []                                          # visible first, then the strongest
+        for p in res.pairs:
             x, z = geom.pixel_to_q(p["col"], p["row"])
+            if qxy_lim[0] < x < qxy_lim[1] and qz_lim[0] < z < qz_lim[1]:
+                vis.append((p, float(x), float(z)))
+        for p, x, z in sorted(vis, key=lambda t: -t[0]["I_pred"])[:label_top]:
             lab = p["label"].split("/")[0]
             dq = p["dq_cif_pct"] if which == "cif" else p["dq_fit_pct"]
-            if qxy_lim[0] < x < qxy_lim[1] and qz_lim[0] < z < qz_lim[1]:
-                ax.text(x + 0.015, z + 0.012, f"{lab} {dq:+.1f}%", color="#7CFC00", fontsize=7.5, clip_on=True)
+            ax.text(x + 0.015, z + 0.012, f"{lab} {dq:+.1f}%", color="#7CFC00", fontsize=7.5, clip_on=True)
         m = res.metrics
         if which == "cif":
             ax.set_title(f"CIF cell, contact {tuple(res.contact)}: rms $\\Delta q$ = {m['rms_dq_cif_pct']:.2f}%")
@@ -159,8 +161,10 @@ def multi_fit_figure(D, mask, res, peaks, path, qxy_lim=(-0.6, 2.0), qz_lim=(0.0
 
 
 def draw_multi(ax, res, peaks, qxy_lim=(-0.6, 2.0), qz_lim=(0.0, 2.0), label_top=8, title=True):
-    """overlay of a MultiResult on an axis that already shows the q-map (used by the GUI and multi_fit_figure)."""
-    handles = []
+    """overlay of a MultiResult on an axis that already shows the q-map (used by the GUI and multi_fit_figure).
+    hkl labels: the `label_top` strongest indexed spots INSIDE the plotted q range, counted over all components
+    together (None = every visible indexed spot; 0 = none).  Returns the number of labels drawn."""
+    handles, candidates = [], []
     for c, (gx, gz, gI) in enumerate(res.group_pos):
         col = COMP_COLORS[c % len(COMP_COLORS)]
         if len(gx):
@@ -179,10 +183,12 @@ def draw_multi(ax, res, peaks, qxy_lim=(-0.6, 2.0), qz_lim=(0.0, 2.0), label_top
         for r in rows:
             x, z = res.geom.pixel_to_q(r["col"], r["row"])
             ax.plot(x, z, "+", color=col, ms=10, mew=1.8)
-        for r in sorted(rows, key=lambda r: -r["I_pred"])[:label_top]:
-            x, z = res.geom.pixel_to_q(r["col"], r["row"])
-            if qxy_lim[0] < x < qxy_lim[1] and qz_lim[0] < z < qz_lim[1]:
-                ax.text(x + 0.015, z + 0.012, r["label"].split("/")[0], color=col, fontsize=7.5, clip_on=True)
+            if qxy_lim[0] < x < qxy_lim[1] and qz_lim[0] < z < qz_lim[1]:     # visible first, then the strongest
+                candidates.append((-r["I_pred"], float(x), float(z), r["label"].split("/")[0], col))
+    candidates.sort(key=lambda t: t[0])
+    shown = candidates if label_top is None else candidates[:max(0, int(label_top))]
+    for _, x, z, lab, col in shown:
+        ax.text(x + 0.015, z + 0.012, lab, color=col, fontsize=7.5, clip_on=True)
     if len(res.unmatched_obs):
         ux, uz = res.geom.pixel_to_q(peaks.col[res.unmatched_obs], peaks.row[res.unmatched_obs])
         h, = ax.plot(ux, uz, "x", color="#ffd400", ms=6, mew=1.3, label=f"not indexed ({len(res.unmatched_obs)})")
@@ -192,6 +198,7 @@ def draw_multi(ax, res, peaks, qxy_lim=(-0.6, 2.0), qz_lim=(0.0, 2.0), label_top
     if title:
         ax.set_title(f"{m['n_components']} textures: {m['n_match']}/{m['n_obs']} spots indexed, fom {m['fom']:.2f}, "
                      f"$\\rho_I$ {m['spearman_I_pooled']:.2f}", fontsize=12)
+    return len(shown)
 
 
 def fom_vs_k_figure(run, path):

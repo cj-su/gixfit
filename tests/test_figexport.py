@@ -83,6 +83,40 @@ class FigExport(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_label_choice("-1")
 
+    def test_labels_follow_the_visible_range(self):
+        """a cropped view still labels the strongest indexed spots that are INSIDE it."""
+        best = self.ev.best
+        pos = [(r, *map(float, best.geom.pixel_to_q(r["col"], r["row"]))) for r in best.pairs]
+        weakest = min(pos, key=lambda t: t[0]["I_pred"])                  # never among the global top 8
+        _, x, z = weakest
+        o = FigureOptions(n_labels=8, qxy_lim=(x - 0.02, x + 0.02), qz_lim=(max(0, z - 0.02), z + 0.02))
+        fig = Figure(figsize=(4, 3), dpi=72)
+        draw_map(fig, self.ses, self.ev, o)
+        inside = sum(1 for _, px, pz in pos if o.qxy_lim[0] < px < o.qxy_lim[1] and o.qz_lim[0] < pz < o.qz_lim[1])
+        self.assertGreaterEqual(inside, 1)
+        self.assertEqual(len(fig.axes[0].texts), min(8, inside))
+
+    def test_label_budget_is_shared_by_components(self):
+        """two textures/crystals: '8' means 8 labels in total, the strongest across both."""
+        from types import SimpleNamespace
+        from matplotlib.figure import Figure as F
+        from gixfit import plots
+        best = self.ev.best
+        pairs = [dict(r, component=k % 2, I_pred=float(len(best.pairs) - k)) for k, r in enumerate(best.pairs)]
+        res = SimpleNamespace(group_pos=[([], [], []), ([], [], [])], groups=[[], []], pairs=pairs, geom=best.geom,
+                              unmatched_obs=[], metrics=best.metrics,
+                              comp_metrics=[dict(phase=p, contact=(1, 0, 0), n_match=0, n_strong_missing=0,
+                                                 n_strong_pred=20) for p in ("A", "B")])
+        for n, want in ((8, 8), (3, 3), (None, len(pairs)), (0, 0)):
+            ax = F().add_subplot(111)
+            self.assertEqual(plots.draw_multi(ax, res, self.ses.peaks, (-5, 5), (0, 5), label_top=n, title=False), want)
+            self.assertEqual(len(ax.texts), want)
+        ax = F().add_subplot(111)
+        plots.draw_multi(ax, res, self.ses.peaks, (-5, 5), (0, 5), label_top=4, title=False)
+        top4 = sorted(pairs, key=lambda r: -r["I_pred"])[:4]                # strongest overall, from both components
+        self.assertEqual(sorted(t.get_text() for t in ax.texts), sorted(r["label"].split("/")[0] for r in top4))
+        self.assertEqual({r["component"] for r in top4}, {0, 1})
+
     def test_save_formats_and_size(self):
         from PIL import Image
         for ext in ("png", "tif", "pdf", "svg"):

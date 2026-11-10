@@ -201,11 +201,12 @@ def phase_map_figure(D, mask, res, peaks, rows, path, qxy_lim=(-0.6, 2.0), qz_li
         h, = ax.plot([], [], mk, mfc="none", mec=col, color=col, mew=1.6, label=text)
         handles.append(h)
     for n in names:
-        top = sorted([r for r in rows if r["label"] == n], key=lambda r: -r["area"])[:label_top]
-        for r in top:
-            if qxy_lim[0] < r["qxy"] < qxy_lim[1] and qz_lim[0] < r["qz"] < qz_lim[1]:
-                ax.text(r["qxy"] + 0.015, r["qz"] + 0.012, r[f"hkl_{n}"].split("/")[0], color=color[n],
-                        fontsize=7.5, clip_on=True)
+        # per crystal (each colour gets its own labels), visible spots first, then the brightest
+        vis = [r for r in rows if r["label"] == n
+               and qxy_lim[0] < r["qxy"] < qxy_lim[1] and qz_lim[0] < r["qz"] < qz_lim[1]]
+        for r in sorted(vis, key=lambda r: -r["area"])[:label_top]:
+            ax.text(r["qxy"] + 0.015, r["qz"] + 0.012, r[f"hkl_{n}"].split("/")[0], color=color[n],
+                    fontsize=7.5, clip_on=True)
     ax.legend(handles=handles, loc="upper right", fontsize=9, framealpha=0.85)
     ax.set_title("Which crystal does each spot belong to? (" + " + ".join(names) + ")", fontsize=12)
     plots.savefig(fig, path)

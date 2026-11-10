@@ -111,7 +111,7 @@ class App:
         self.v_chance = tk.StringVar(value="Off (fast fit)")
         ttk.Combobox(fo, textvariable=self.v_chance, values=list(CHANCE), state="readonly",
                      width=20).grid(row=2, column=1, sticky="w")
-        ttk.Label(fo, text="hkl labels on the map").grid(row=3, column=0, sticky="w")
+        ttk.Label(fo, text="hkl labels (strongest visible)").grid(row=3, column=0, sticky="w")
         self.v_nlab = tk.StringVar(value="8")
         cb = ttk.Combobox(fo, textvariable=self.v_nlab, values=LABEL_CHOICES, width=6)
         cb.grid(row=3, column=1, sticky="w")
