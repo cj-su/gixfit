@@ -30,19 +30,55 @@ class FigureOptions:
     cmap: str = "magma"
     overlay: bool = True                # predicted / indexed / not-indexed spots of the fit
     labels: bool = True                 # hkl labels of the strongest indexed spots
+    n_labels: int | None = 8            # how many indexed spots get an hkl label (strongest first); None = all
     legend: bool = True
     colorbar: bool = True
     title: str = ""
     cbar_label: str = "Intensity (counts)"
-    qxy_lim: tuple = (-0.6, 2.0)
-    qz_lim: tuple = (0.0, 2.0)
-    width_in: float = 6.5
-    height_in: float = 5.2
+    qxy_lim: tuple | None = None        # None: the detector's own coverage on both sides (auto_qlims)
+    qz_lim: tuple | None = None
+    width_in: float = 7.5
+    height_in: float = 5.0
     dpi: int = 300
+
+
+def auto_qlims(session, qmax=None, step=0.1):
+    """(qxy_lim, qz_lim) covering every usable pixel up to |q| = qmax (default max(2, q_max)), on BOTH sides of the
+    beam, rounded outwards to `step`.  Fixed limits such as q_xy -0.6..2 hide the negative-q_xy half of a detector
+    whose beam centre is near the middle, together with the spots indexed there."""
+    cached = getattr(session, "_auto_qlims", None)
+    if qmax is None and cached is not None:
+        return cached
+    qm = qmax if qmax is not None else max(2.0, float(getattr(session.s, "q_max", 2.0)))
+    rows, cols = np.nonzero(session.mask[::4, ::4])
+    qxy, qz = session.geom.pixel_to_q(cols * 4.0, rows * 4.0)
+    ok = np.isfinite(qxy) & np.isfinite(qz) & (np.hypot(qxy, qz) <= qm)
+    if not ok.any():
+        lims = ((-0.6, 2.0), (0.0, 2.0))
+    else:
+        lo, hi = float(qxy[ok].min()), float(qxy[ok].max())
+        x0 = min(np.floor(lo / step) * step, 0.0); x1 = max(np.ceil(hi / step) * step, 0.0)
+        z1 = np.ceil(float(qz[ok].max()) / step) * step
+        lims = ((round(x0, 6), round(x1, 6)), (0.0, round(max(z1, step), 6)))
+    if qmax is None:
+        try:
+            session._auto_qlims = lims
+        except AttributeError:
+            pass
+    return lims
+
+
+def resolve(opts: FigureOptions, session) -> FigureOptions:
+    """fill automatic q limits from the detector coverage."""
+    if opts.qxy_lim is not None and opts.qz_lim is not None:
+        return opts
+    ax, az = auto_qlims(session)
+    return replace(opts, qxy_lim=opts.qxy_lim or ax, qz_lim=opts.qz_lim or az)
 
 
 def qgrid_for(session, opts: FigureOptions, cache=None):
     """image resampled on a regular (q_xy, q_z) grid; reuse `cache` when it covers the same limits."""
+    opts = resolve(opts, session)
     if cache is not None:
         qxy, qz, _ = cache
         if qxy[0] <= opts.qxy_lim[0] + 1e-9 and qxy[-1] >= opts.qxy_lim[1] - 0.01 and \
@@ -92,6 +128,7 @@ def limits(img, opts: FigureOptions):
 def draw_map(fig: Figure, session, evaluation, opts: FigureOptions, qgrid=None):
     """draw the map (+ fit overlay + colour bar) into `fig`; returns the q-grid used (for caching)."""
     fig.clear()
+    opts = resolve(opts, session)
     qgrid = qgrid_for(session, opts, qgrid)
     qxy, qz, img = qgrid
     lo, hi = limits(visible(qgrid, opts), opts)
@@ -107,7 +144,7 @@ def draw_map(fig: Figure, session, evaluation, opts: FigureOptions, qgrid=None):
     best = getattr(evaluation, "best", None)
     if opts.overlay and best is not None:
         plots.draw_multi(ax, best, session.peaks, opts.qxy_lim, opts.qz_lim,
-                         label_top=8 if opts.labels else 0, title=False)
+                         label_top=label_count(opts), title=False)
         leg = ax.get_legend()
         if leg is not None and not opts.legend:
             leg.remove()
@@ -128,6 +165,34 @@ def draw_map(fig: Figure, session, evaluation, opts: FigureOptions, qgrid=None):
         cb.set_label(opts.cbar_label)
     fig.tight_layout()
     return qgrid
+
+
+LABEL_CHOICES = ("none", "8", "20", "all")
+
+
+def label_count(opts: FigureOptions):
+    """label_top for plots.draw_multi: 0 = none, None = every indexed spot."""
+    if not opts.labels:
+        return 0
+    return None if opts.n_labels is None else max(0, int(opts.n_labels))
+
+
+def label_choice(n):
+    """FigureOptions.n_labels / app setting -> combobox text."""
+    return "all" if n is None else ("none" if n == 0 else str(n))
+
+
+def parse_label_choice(text):
+    """combobox text ('none', '8', '20', 'all' or any integer) -> n_labels."""
+    t = str(text).strip().lower()
+    if t == "all":
+        return None
+    if t == "none":
+        return 0
+    n = int(t)
+    if n < 0:
+        raise ValueError("Number of hkl labels must be 0 or more.")
+    return n
 
 
 def log_ticks(lo, hi, n_max=7):
@@ -162,7 +227,7 @@ def save_map(path, session, evaluation, opts: FigureOptions = None, qgrid=None):
 
 
 # ---------------------------------------------------------------------- desktop dialog
-def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None):
+def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None, n_labels=8):
     """modal-less Tk dialog: controls on the left, live preview on the right, Save... writes the file."""
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
@@ -170,7 +235,7 @@ def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None):
     from PIL import Image, ImageTk
 
     name = getattr(evaluation, "name", None) or os.path.splitext(os.path.basename(session.path))[0]
-    opts = FigureOptions(title=name)
+    opts = resolve(FigureOptions(title=name, n_labels=n_labels), session)
     state = {"qgrid": qgrid_for(session, opts, qgrid), "job": None}
     win = tk.Toplevel(parent)
     win.title("Export figure - preview")
@@ -189,7 +254,7 @@ def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None):
     v = dict(lo=tk.DoubleVar(value=opts.lo_pct), hi=tk.DoubleVar(value=opts.hi_pct),
              vmin=tk.StringVar(), vmax=tk.StringVar(), scale=tk.StringVar(value=opts.scale),
              cmap=tk.StringVar(value=opts.cmap), overlay=tk.BooleanVar(value=True),
-             labels=tk.BooleanVar(value=True), legend=tk.BooleanVar(value=True),
+             nlab=tk.StringVar(value=label_choice(n_labels)), legend=tk.BooleanVar(value=True),
              colorbar=tk.BooleanVar(value=True), title=tk.StringVar(value=opts.title),
              cbar=tk.StringVar(value=opts.cbar_label), w=tk.StringVar(value=f"{opts.width_in:g}"),
              h=tk.StringVar(value=f"{opts.height_in:g}"), dpi=tk.StringVar(value=str(opts.dpi)),
@@ -219,7 +284,10 @@ def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None):
 
     ttk.Separator(left).pack(fill="x", pady=6)
     ttk.Label(left, text="Content", font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
-    for key, text in (("overlay", "Fit overlay (predicted / indexed / not indexed)"), ("labels", "hkl labels"),
+    r = ttk.Frame(left); r.pack(anchor="w")
+    ttk.Label(r, text="hkl labels (strongest indexed spots)").pack(side="left")
+    ttk.Combobox(r, textvariable=v["nlab"], values=LABEL_CHOICES, width=6).pack(side="left", padx=3)
+    for key, text in (("overlay", "Fit overlay (predicted / indexed / not indexed)"),
                       ("legend", "Legend"), ("colorbar", "Colour bar")):
         ttk.Checkbutton(left, text=text, variable=v[key], command=lambda: schedule()).pack(anchor="w")
     for key, text in (("title", "Title"), ("cbar", "Colour-bar label")):
@@ -268,7 +336,7 @@ def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None):
 
     def current() -> FigureOptions:
         o = replace(opts, lo_pct=float(v["lo"].get()), hi_pct=float(v["hi"].get()), scale=v["scale"].get(),
-                    cmap=v["cmap"].get(), overlay=v["overlay"].get(), labels=v["labels"].get(),
+                    cmap=v["cmap"].get(), overlay=v["overlay"].get(), labels=True, n_labels=parse_label_choice(v["nlab"].get()),
                     legend=v["legend"].get(), colorbar=v["colorbar"].get(), title=v["title"].get(),
                     cbar_label=v["cbar"].get(), vmin=_num(v["vmin"]), vmax=_num(v["vmax"]),
                     qxy_lim=(_num(v["qx0"]), _num(v["qx1"])), qz_lim=(_num(v["qz0"]), _num(v["qz1"])),
@@ -333,7 +401,7 @@ def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None):
     s_hi.configure(command=release_max)
     e_min.bind("<Return>", fix_typed); e_max.bind("<Return>", fix_typed)
     e_min.bind("<FocusOut>", fix_typed); e_max.bind("<FocusOut>", fix_typed)
-    for key in ("scale", "cmap"):
+    for key in ("scale", "cmap", "nlab"):
         v[key].trace_add("write", schedule)
     for key in ("title", "cbar", "w", "h", "dpi", "qx0", "qx1", "qz0", "qz1"):
         v[key].trace_add("write", schedule)

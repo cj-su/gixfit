@@ -66,6 +66,23 @@ class FigExport(unittest.TestCase):
         draw_map(fig, self.ses, self.ev, FigureOptions(colorbar=False))
         self.assertEqual(len(fig.axes), 1)
 
+    def test_number_of_hkl_labels(self):
+        from gixfit.figexport import parse_label_choice, label_choice
+        n_idx = len(self.ev.best.pairs)
+        counts = {}
+        for n in (0, 3, 8, None):
+            fig = Figure(figsize=(6.5, 5.2), dpi=72)
+            draw_map(fig, self.ses, self.ev, FigureOptions(n_labels=n, qxy_lim=(-2, 3), qz_lim=(0, 3)))
+            counts[n] = len(fig.axes[0].texts)
+        self.assertEqual(counts[0], 0)
+        self.assertEqual(counts[3], min(3, n_idx))
+        self.assertEqual(counts[None], n_idx)                      # 'all' labels every indexed spot
+        self.assertGreater(counts[None], counts[8])                 # tutorial: 38 indexed > 8
+        self.assertEqual([parse_label_choice(t) for t in ("none", "8", "20", "all", " 12 ")], [0, 8, 20, None, 12])
+        self.assertEqual([label_choice(n) for n in (0, 8, None)], ["none", "8", "all"])
+        with self.assertRaises(ValueError):
+            parse_label_choice("-1")
+
     def test_save_formats_and_size(self):
         from PIL import Image
         for ext in ("png", "tif", "pdf", "svg"):

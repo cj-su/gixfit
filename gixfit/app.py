@@ -26,6 +26,7 @@ from matplotlib.colors import LogNorm
 from . import plots                      # noqa: F401  (sets the Times New Roman house style)
 from .engine import Settings, Session, check_cif, compare_cifs, identify, export
 from .peaks import to_qgrid
+from .figexport import LABEL_CHOICES, parse_label_choice, auto_qlims
 from .crystal import PARAM_NAMES
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -110,6 +111,12 @@ class App:
         self.v_chance = tk.StringVar(value="Off (fast fit)")
         ttk.Combobox(fo, textvariable=self.v_chance, values=list(CHANCE), state="readonly",
                      width=20).grid(row=2, column=1, sticky="w")
+        ttk.Label(fo, text="hkl labels on the map").grid(row=3, column=0, sticky="w")
+        self.v_nlab = tk.StringVar(value="8")
+        cb = ttk.Combobox(fo, textvariable=self.v_nlab, values=LABEL_CHOICES, width=6)
+        cb.grid(row=3, column=1, sticky="w")
+        cb.bind("<<ComboboxSelected>>", lambda *_: self._draw(self._shown_ev))
+        cb.bind("<Return>", lambda *_: self._draw(self._shown_ev))
 
         # --- 2 tasks
         nb = ttk.Notebook(left)
@@ -574,7 +581,15 @@ class App:
             messagebox.showinfo("gixfit", "Find spots first; then select a result to include its fit."); return
         from .figexport import open_dialog
         self.fig_dialog = open_dialog(self.root, self.session, self._shown_ev, self._qgrid,
-                                      initial_dir=os.path.dirname(self.session.path))
+                                      initial_dir=os.path.dirname(self.session.path), n_labels=self._n_labels())
+
+    def _n_labels(self):
+        """'hkl labels on the map' setting -> label_top (None = all); an unreadable entry falls back to 8."""
+        try:
+            return parse_label_choice(self.v_nlab.get())
+        except ValueError:
+            self.v_nlab.set("8")
+            return 8
 
     def _draw(self, ev=None):
         self._shown_ev = ev
@@ -588,7 +603,7 @@ class App:
             return
         ax.set_axis_on()
         ses = self.session
-        qlims = ((-0.6, max(2.0, ses.s.q_max)), (0.0, max(2.0, ses.s.q_max)))
+        qlims = auto_qlims(ses)                    # both sides of the beam: spots at negative q_xy stay visible
         if self._qgrid is None:
             self._qgrid = to_qgrid(ses.D, ses.mask, ses.geom, qlims[0], qlims[1], 0.004)
         qxy, qz, img = self._qgrid
@@ -604,7 +619,7 @@ class App:
             ax.scatter(px, pz, s=40, facecolors="none", edgecolors="cyan", lw=1.0)
             ax.set_title(f"{os.path.basename(ses.path)}: {len(ses.peaks)} spots", fontsize=11)
         else:
-            plots.draw_multi(ax, ev.best, ses.peaks, qlims[0], qlims[1], title=False)
+            plots.draw_multi(ax, ev.best, ses.peaks, qlims[0], qlims[1], label_top=self._n_labels(), title=False)
             ax.set_title(f"{ev.name}: {ev.verdict}", fontsize=11)
         self.fig.tight_layout()
         self.canvas.draw_idle()
