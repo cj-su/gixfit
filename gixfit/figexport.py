@@ -238,7 +238,7 @@ def save_map(path, session, evaluation, opts: FigureOptions = None, qgrid=None):
 
 
 # ---------------------------------------------------------------------- desktop dialog
-def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None, n_labels=8):
+def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None, n_labels=8, qxy_lim=None, qz_lim=None):
     """modal-less Tk dialog: controls on the left, live preview on the right, Save... writes the file."""
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
@@ -246,7 +246,7 @@ def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None, n_lab
     from PIL import Image, ImageTk
 
     name = display_name(evaluation, os.path.splitext(os.path.basename(session.path))[0])
-    opts = resolve(FigureOptions(title=name, n_labels=n_labels), session)
+    opts = resolve(FigureOptions(title=name, n_labels=n_labels, qxy_lim=qxy_lim, qz_lim=qz_lim), session)
     state = {"qgrid": qgrid_for(session, opts, qgrid), "job": None}
     win = tk.Toplevel(parent)
     win.title("Export figure - preview")

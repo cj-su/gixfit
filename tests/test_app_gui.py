@@ -93,6 +93,13 @@ def main():
     print("   ", app.joints[0].verdict)
     app.fig.savefig(os.path.join(out, "03b_joint.png"), dpi=110)
 
+    # Export figure starts from the zoom shown on screen
+    app.ax.set_xlim(0.3, 1.2); app.ax.set_ylim(0.1, 0.9); root.update()
+    app._export_figure(); root.update()
+    o = app.fig_dialog.current()
+    assert o.qxy_lim == (0.3, 1.2) and o.qz_lim == (0.1, 0.9), (o.qxy_lim, o.qz_lim)
+    app.fig_dialog.destroy(); app._draw(app._shown_ev)
+
     app.lb_lib.delete(0, "end")
     app.lb_lib.insert("end", os.path.dirname(candidate))
     app.v_top.set("2")

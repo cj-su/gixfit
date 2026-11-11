@@ -395,7 +395,8 @@ def check_cif(session: Session, cif_path, settings=None, contact=None, log=None)
 @dataclass
 class JointFit:
     """two or more crystals fitted together: they compete for the spots (each spot goes to at most one predicted
-    reflection of one crystal), every crystal gets its own refined cell and contact plane, and every spot is labelled
+    reflection of one crystal), every crystal gets its own refined cell and contact plane, and every spot in the
+    fitted q range is labelled
     by the crystals that predict a reflection there (phase map).  Descriptive: no surrogate test."""
     name: str
     names: list
@@ -405,6 +406,7 @@ class JointFit:
     counts: dict                 # label -> dict(n, w)  (w = share of sqrt-weighted spot intensity)
     forced: list                 # crystals that had to be added (assumed present, not established)
     seconds: float
+    n_detected: int = 0          # all detected spots; rows cover only those in the fitted q range
     joint: bool = True
     z_chi: float = np.nan
     z_q: float = np.nan
@@ -448,16 +450,20 @@ class JointFit:
         for i, st in enumerate(self.structs):
             if res.cells[i] is not None:
                 lines.append(f"  {st.name} refined cell: " + " ".join(f"{v:.3f}" for v in res.cells[i].array()))
-        lines.append("  phase map (spots; share of spot intensity):")
+        lines.append(f"  phase map of the {len(self.rows)} spots in the fitted q range ({self.n_detected} detected); "
+                     "counts and share of spot intensity:")
         for lab, d in sorted(self.counts.items(), key=lambda kv: -kv[1]["n"]):
             lines.append(f"    {lab:30s} {d['n']:4d}  {100 * d['w']:5.1f} %")
-        lines.append("  'A + B' = both crystals predict a reflection there (shared); 'unassigned' = neither. "
-                     "Descriptive: no surrogate test.")
+        lines.append("  'A + B' = both crystals predict a reflection there (shared); 'unassigned' = neither crystal "
+                     "predicts a reflection there. This differs from the map's 'not indexed' (spots the joint fit did "
+                     "not assign) and from the per-crystal 'spots indexed' above (assigned spots). Descriptive: no "
+                     "surrogate test.")
         return "\n".join(lines)
 
 
 def joint_fit(session: Session, structs, settings: Settings = None, log=None, min_I=0.02) -> JointFit:
-    """fit several crystals together (one texture each, contact planes searched) and label every spot."""
+    """fit several crystals together (one texture each, contact planes searched) and label every spot in the fitted
+    q range.  Crystals are sorted by name, so the result and the colours do not depend on the selection order."""
     from .phasemap import fit_phases, phase_map, summary
     from .crystal import PARAM_NAMES
     log = log or (lambda *_: None)
@@ -465,7 +471,7 @@ def joint_fit(session: Session, structs, settings: Settings = None, log=None, mi
     s.validate()
     if not session.matches_inputs(session.path, s):
         raise ValueError("Image geometry or detection settings changed; find spots again before fitting.")
-    structs = [deepcopy(st) for st in structs]
+    structs = sorted((deepcopy(st) for st in structs), key=lambda st: st.name.lower())   # order-independent
     if len(structs) < 2:
         raise ValueError("Fitting together needs at least two crystals.")
     t0 = time.time()
@@ -477,7 +483,7 @@ def joint_fit(session: Session, structs, settings: Settings = None, log=None, mi
     res, _, forced = fit_phases(structs, session.geom, session.peaks, session.mask, fc, mc, log=log)
     rows = phase_map(res, session.peaks, min_I=min_I)
     jf = JointFit(" + ".join(st.name for st in structs) + " (together)", [st.name for st in structs], structs,
-                  res, rows, summary(rows, res), forced, time.time() - t0)
+                  res, rows, summary(rows, res), forced, time.time() - t0, len(session.peaks))
     log(jf.report)
     return jf
 

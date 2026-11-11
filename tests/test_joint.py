@@ -62,6 +62,20 @@ class JointFit(unittest.TestCase):
         self.assertIn("crystal B (0, 0, 1)", self.jf.report.replace("(0, 0, -1)", "(0, 0, 1)"))
         self.assertTrue(np.isfinite(self.jf.fom) and 0 < self.jf.fom <= 1)
 
+    def test_selection_order_does_not_matter(self):
+        """reversing the order of the crystals gives the same crystals, colours (= phase order) and assignment."""
+        jf2 = joint_fit(self.ses, [self.B, self.A], self.ses.s)
+        self.assertEqual(jf2.names, self.jf.names)
+        self.assertEqual(jf2.best.phase_names, self.jf.best.phase_names)
+        key = lambda j: sorted((r["obs"], r["phase"]) for r in j.best.pairs)
+        self.assertEqual(key(jf2), key(self.jf))
+
+    def test_phase_map_covers_fitted_q_range_only(self):
+        q = [r["q"] for r in self.jf.rows]
+        self.assertTrue(all(self.ses.s.q_min <= x <= self.ses.s.q_max for x in q))
+        self.assertEqual(self.jf.n_detected, len(self.ses.peaks))
+        self.assertIn(f"{len(self.jf.rows)} spots in the fitted q range", self.jf.report)
+
     def test_needs_two(self):
         with self.assertRaises(ValueError):
             joint_fit(self.ses, [self.A], self.ses.s)

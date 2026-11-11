@@ -532,7 +532,8 @@ class App:
             self._fill_results()
             self._select([f"J{len(self.joints) - 1}"])
             self._fill_phase_table(res)
-            self.v_status.set(f"Fitted together: {res.verdict}")
+            self.v_status.set(f"Fitted together: {res.verdict}  (phase map: {len(res.rows)} spots in the fitted "
+                              f"q range of {res.n_detected} detected)")
             self.nb_out.select(2)
         else:
             self.evals, self.flags = res
@@ -609,7 +610,8 @@ class App:
         self._select([])
 
     def _show_selected(self, focus=None):
-        objs = [self._row_object(i) for i in self._sel]
+        order = list(self.tv_res.get_children(""))
+        objs = [self._row_object(i) for i in sorted(self._sel, key=lambda i: order.index(i) if i in order else 1e9)]
         self._draw(objs if len(objs) > 1 else (objs[0] if objs else None))
         tv = self.tv_err
         tv.delete(*tv.get_children(""))
@@ -690,8 +692,12 @@ class App:
         if not self.session:
             messagebox.showinfo("gixfit", "Find spots first; then select a result to include its fit."); return
         from .figexport import open_dialog
+        # start from the view on screen: a zoomed map is exported zoomed (rounded to 0.001 A^-1)
+        (x0, x1), (z0, z1) = self.ax.get_xlim(), self.ax.get_ylim()
+        view = lambda a, b: (round(min(a, b), 3), round(max(a, b), 3))
         self.fig_dialog = open_dialog(self.root, self.session, self._shown_ev, self._qgrid,
-                                      initial_dir=os.path.dirname(self.session.path), n_labels=self._n_labels())
+                                      initial_dir=os.path.dirname(self.session.path), n_labels=self._n_labels(),
+                                      qxy_lim=view(x0, x1), qz_lim=view(z0, z1))
 
     def _n_labels(self):
         """'hkl labels on the map' setting -> label_top (None = all); an unreadable entry falls back to 8."""
