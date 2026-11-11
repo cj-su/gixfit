@@ -407,6 +407,7 @@ class JointFit:
     forced: list                 # crystals that had to be added (assumed present, not established)
     seconds: float
     n_detected: int = 0          # all detected spots; rows cover only those in the fitted q range
+    q_range: tuple = None        # (q_min, q_max) used for this fit
     joint: bool = True
     z_chi: float = np.nan
     z_q: float = np.nan
@@ -483,7 +484,8 @@ def joint_fit(session: Session, structs, settings: Settings = None, log=None, mi
     res, _, forced = fit_phases(structs, session.geom, session.peaks, session.mask, fc, mc, log=log)
     rows = phase_map(res, session.peaks, min_I=min_I)
     jf = JointFit(" + ".join(st.name for st in structs) + " (together)", [st.name for st in structs], structs,
-                  res, rows, summary(rows, res), forced, time.time() - t0, len(session.peaks))
+                  res, rows, summary(rows, res), forced, time.time() - t0, len(session.peaks),
+                  q_range=(float(s.q_min), float(s.q_max)))
     log(jf.report)
     return jf
 

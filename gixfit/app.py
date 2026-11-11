@@ -98,6 +98,8 @@ class App:
             v = tk.StringVar()
             ttk.Entry(f1, textvariable=v, width=12).grid(row=3 + i, column=1, columnspan=2, sticky="w")
             self.vars[attr] = v
+        for key in ("q_min", "q_max"):              # the fitted q range: arcs, 'used' spots, stale results - live
+            self.vars[key].trace_add("write", lambda *_: self._schedule_qrange())
         self.b_find = ttk.Button(f1, text="Find spots", command=self._run_find)
         self.b_find.grid(row=4 + len(FIELDS), column=0, columnspan=3, sticky="we", pady=(6, 0))
 
@@ -448,7 +450,7 @@ class App:
         if not os.path.isfile(cif):
             messagebox.showerror("gixfit", "Choose a CIF file."); return
         s = self._apply_options()
-        if s is None:
+        if s is None or not self._enough_spots(s):
             return
         txt = self.v_contact.get().strip().lower()
         contact = None
@@ -468,7 +470,7 @@ class App:
         if len(cifs) < 2:
             messagebox.showinfo("gixfit", "Add at least two CIF files."); return
         s = self._apply_options()
-        if s is None:
+        if s is None or not self._enough_spots(s):
             return
         ses = self.session
         self._start("Compare CIFs", lambda: compare_cifs(ses, cifs, s, log=self._logq))
@@ -480,7 +482,7 @@ class App:
         if not libs:
             messagebox.showinfo("gixfit", "Add a CIF library folder."); return
         s = self._apply_options()
-        if s is None:
+        if s is None or not self._enough_spots(s):
             return
         ses, excl = self.session, self.v_excl.get().strip()
         self._start("Identify", lambda: identify(ses, libs, s, excl, log=self._logq)[:2])
@@ -550,10 +552,76 @@ class App:
     def _fill_spots(self):
         tv = self.tv_spots
         tv.delete(*tv.get_children(""))
+        lo, hi = self._q_range_now() or (self.session.s.q_min, self.session.s.q_max)
         for r in self.session.peak_rows():
             tv.insert("", "end", values=(r["id"], f"{r['q']:.4f}", f"{r['d']:.3f}", f"{r['chi']:.1f}",
                                          f"{r['qxy']:.4f}", f"{r['qz']:.4f}", f"{r['intensity']:.3g}",
-                                         f"{r['snr']:.0f}", "yes" if r["used"] else ""))
+                                         f"{r['snr']:.0f}", "yes" if lo <= r["q"] <= hi else ""))
+
+    # ------------------------------------------------------------------ q range (live)
+    MIN_SPOTS = 6
+
+    def _enough_spots(self, s):
+        """a cell fit needs spots: refuse (with the reason) when the q range holds fewer than MIN_SPOTS."""
+        q = self.session.q()[2]
+        n = int(np.sum((q >= s.q_min) & (q <= s.q_max)))
+        if n >= self.MIN_SPOTS:
+            return True
+        messagebox.showwarning("gixfit", f"Only {n} detected spot(s) lie between q min = {s.q_min:g} and q max = "
+                                         f"{s.q_max:g} A^-1. A cell fit needs at least {self.MIN_SPOTS} (better 15 "
+                                         "or more): widen the q range (the dashed arcs on the map show it).")
+        self.v_status.set(f"Not fitted: only {n} spots in the q range {s.q_min:g}-{s.q_max:g} A^-1.")
+        return False
+
+    def _q_range_now(self):
+        """(q_min, q_max) as typed, or None if the boxes do not hold 0 <= q_min < q_max."""
+        try:
+            lo, hi = float(self.vars["q_min"].get()), float(self.vars["q_max"].get())
+        except ValueError:
+            return None
+        return (lo, hi) if np.isfinite(lo) and np.isfinite(hi) and 0 <= lo < hi else None
+
+    def _schedule_qrange(self):
+        if getattr(self, "_qjob", None):
+            self.root.after_cancel(self._qjob)
+        self._qjob = self.root.after(300, self._on_qrange)
+
+    @staticmethod
+    def _fit_qrange(o):
+        if getattr(o, "joint", False):
+            return getattr(o, "q_range", None)
+        st = (getattr(o, "recipe", None) or {}).get("settings") or {}
+        return (st["q_min"], st["q_max"]) if "q_min" in st else None
+
+    def _mark_stale(self):
+        """grey the result rows fitted with another q range than the one in the boxes; returns their count."""
+        qr = self._q_range_now()
+        self.tv_res.tag_configure("stale", foreground="#9a9a9a")
+        n = 0
+        for iid in self.tv_res.get_children(""):
+            fr = self._fit_qrange(self._row_object(iid))
+            stale = qr is not None and fr is not None and (abs(fr[0] - qr[0]) > 1e-9 or abs(fr[1] - qr[1]) > 1e-9)
+            self.tv_res.item(iid, tags=("stale",) if stale else ())
+            n += stale
+        return n
+
+    def _on_qrange(self):
+        self._qjob = None
+        if self.session is None:
+            return
+        qr = self._q_range_now()
+        if qr is None:
+            self.v_status.set("q range: enter numbers with 0 <= q min < q max.")
+            return
+        self._fill_spots()
+        n_stale = self._mark_stale()
+        self._draw(self._shown_ev)
+        q = self.session.q()[2]
+        n_in = int(np.sum((q >= qr[0]) & (q <= qr[1])))
+        msg = (f"q range {qr[0]:g}-{qr[1]:g} A^-1: {n_in} of {len(q)} spots in range (dashed arcs on the map).")
+        if n_stale:
+            msg += f" {n_stale} result(s) were fitted with another range (grey): press Check match / Compare again."
+        self.v_status.set(msg)
 
     def _fill_results(self):
         tv = self.tv_res
@@ -576,6 +644,7 @@ class App:
             tv.insert("", "end", iid=f"J{k}", values=(
                 "joint", j.name, j.verdict, f"{j.fom:.3f}", "", "", f"{m['n_match']}/{m['n_obs']}",
                 j.best.label(), j.change))
+        self._mark_stale()
 
     # ------------------------------------------------------------------ selection (click = add, double-click = remove)
     def _row_object(self, iid):
@@ -666,7 +735,7 @@ class App:
         if len(evs) > 4:
             messagebox.showinfo("gixfit", "Select at most four crystals."); return
         s = self._apply_options()
-        if s is None:
+        if s is None or not self._enough_spots(s):
             return
         ses = self.session
         structs = [deepcopy(e.struct) for e in evs]
@@ -731,10 +800,14 @@ class App:
         ax.set_xlabel(r"$q_{xy}$ ($\AA^{-1}$)"); ax.set_ylabel(r"$q_z$ ($\AA^{-1}$)")
         ax.set_xlim(qlims[0]); ax.set_ylim(qlims[1])
         evs = [e for e in as_list(ev) if getattr(e, "best", None) is not None]
+        qr = self._q_range_now()
         if not evs:
             px, pz = ses.geom.pixel_to_q(ses.peaks.col, ses.peaks.row)
-            ax.scatter(px, pz, s=40, facecolors="none", edgecolors="cyan", lw=1.0)
-            ax.set_title(f"{os.path.basename(ses.path)}: {len(ses.peaks)} spots", fontsize=11)
+            inr = np.ones(len(px), bool) if qr is None else (np.hypot(px, pz) >= qr[0]) & (np.hypot(px, pz) <= qr[1])
+            ax.scatter(px[inr], pz[inr], s=40, facecolors="none", edgecolors="cyan", lw=1.0)
+            ax.scatter(px[~inr], pz[~inr], s=40, facecolors="none", edgecolors="#9a9a9a", lw=1.0)
+            ax.set_title(f"{os.path.basename(ses.path)}: {len(ses.peaks)} spots, {int(inr.sum())} in the q range",
+                         fontsize=11)
         else:
             plots.draw_overlay(ax, [e.best for e in evs], ses.peaks, qlims[0], qlims[1], label_top=self._n_labels())
             if len(evs) == 1 and getattr(evs[0], "joint", False):
@@ -743,6 +816,10 @@ class App:
                 ax.set_title(f"{evs[0].name}: {evs[0].verdict}", fontsize=11)
             else:
                 ax.set_title(" + ".join(e.name for e in evs) + "  (each fitted separately)", fontsize=11)
+        if qr is not None:                          # the q range used for fitting: dashed arcs at q min and q max
+            t = np.linspace(-np.pi / 2, np.pi / 2, 361)
+            for qq in qr:
+                ax.plot(qq * np.sin(t), qq * np.cos(t), "--", color="#7CFC00", lw=1.0, alpha=0.9)
         self.fig.tight_layout()
         self.canvas.draw_idle()
 

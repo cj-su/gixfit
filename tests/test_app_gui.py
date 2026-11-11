@@ -100,6 +100,21 @@ def main():
     assert o.qxy_lim == (0.3, 1.2) and o.qz_lim == (0.1, 0.9), (o.qxy_lim, o.qz_lim)
     app.fig_dialog.destroy(); app._draw(app._shown_ev)
 
+    # q range boxes act immediately: arcs on the map, 'used' spots, results fitted with another range greyed
+    q0, q1 = app.vars["q_min"].get(), app.vars["q_max"].get()
+    app.vars["q_min"].set("0.35"); app.vars["q_max"].set("0.36"); app._on_qrange(); root.update()
+    assert sum(1 for l in app.ax.lines if l.get_linestyle() == "--") == 2
+    n_used = sum(1 for i in app.tv_spots.get_children("") if app.tv_spots.set(i, "used") == "yes")
+    assert n_used < 6 and all("stale" in app.tv_res.item(i, "tags") for i in app.tv_res.get_children("")), n_used
+    n_ev = len(app.evals)
+    import tkinter.messagebox as mb
+    warned = []
+    mb.showwarning = lambda *a, **k: warned.append(a)
+    app._run_check(); root.update()
+    assert warned and len(app.evals) == n_ev and not app.busy        # too few spots: refused, nothing started
+    app.vars["q_min"].set(q0); app.vars["q_max"].set(q1); app._on_qrange(); root.update()
+    assert not any("stale" in app.tv_res.item(i, "tags") for i in app.tv_res.get_children(""))
+
     app.lb_lib.delete(0, "end")
     app.lb_lib.insert("end", os.path.dirname(candidate))
     app.v_top.set("2")
