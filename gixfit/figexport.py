@@ -32,6 +32,7 @@ class FigureOptions:
     labels: bool = True                 # hkl labels of the strongest indexed spots
     n_labels: int | None = 8            # labels on the N strongest VISIBLE indexed spots, all components together; None = all
     legend: bool = True
+    matched_only: bool = False          # keep only peaks found in both the image and the structure
     colorbar: bool = True
     title: str = ""
     cbar_label: str = "Intensity (counts)"
@@ -143,7 +144,8 @@ def draw_map(fig: Figure, session, evaluation, opts: FigureOptions, qgrid=None):
     ax.set_xlim(opts.qxy_lim); ax.set_ylim(opts.qz_lim)
     fits = [e.best for e in as_list(evaluation) if getattr(e, "best", None) is not None]
     if opts.overlay and fits:
-        plots.draw_overlay(ax, fits, session.peaks, opts.qxy_lim, opts.qz_lim, label_top=label_count(opts))
+        plots.draw_overlay(ax, fits, session.peaks, opts.qxy_lim, opts.qz_lim, label_top=label_count(opts),
+                           matched_only=opts.matched_only)
         leg = ax.get_legend()
         if leg is not None and not opts.legend:
             leg.remove()
@@ -266,6 +268,7 @@ def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None, n_lab
              vmin=tk.StringVar(), vmax=tk.StringVar(), scale=tk.StringVar(value=opts.scale),
              cmap=tk.StringVar(value=opts.cmap), overlay=tk.BooleanVar(value=True),
              nlab=tk.StringVar(value=label_choice(n_labels)), legend=tk.BooleanVar(value=True),
+             matched=tk.BooleanVar(value=False),
              colorbar=tk.BooleanVar(value=True), title=tk.StringVar(value=opts.title),
              cbar=tk.StringVar(value=opts.cbar_label), w=tk.StringVar(value=f"{opts.width_in:g}"),
              h=tk.StringVar(value=f"{opts.height_in:g}"), dpi=tk.StringVar(value=str(opts.dpi)),
@@ -301,6 +304,8 @@ def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None, n_lab
     ttk.Label(left, text="(number of labels: the strongest indexed spots inside the q range, all crystals "
                          "together; it does not pick particular hkl. 'all' can overlap.)",
               foreground="#555", wraplength=330, justify="left").pack(anchor="w")
+    ttk.Checkbutton(left, text="Only matched peaks (found in the image AND the structure)",
+                    variable=v["matched"], command=lambda: schedule()).pack(anchor="w")
     for key, text in (("overlay", "Fit overlay (predicted / indexed / not indexed)"),
                       ("legend", "Legend"), ("colorbar", "Colour bar")):
         ttk.Checkbutton(left, text=text, variable=v[key], command=lambda: schedule()).pack(anchor="w")
@@ -351,6 +356,7 @@ def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None, n_lab
     def current() -> FigureOptions:
         o = replace(opts, lo_pct=float(v["lo"].get()), hi_pct=float(v["hi"].get()), scale=v["scale"].get(),
                     cmap=v["cmap"].get(), overlay=v["overlay"].get(), labels=True, n_labels=parse_label_choice(v["nlab"].get()),
+                    matched_only=v["matched"].get(),
                     legend=v["legend"].get(), colorbar=v["colorbar"].get(), title=v["title"].get(),
                     cbar_label=v["cbar"].get(), vmin=_num(v["vmin"]), vmax=_num(v["vmax"]),
                     qxy_lim=(_num(v["qx0"]), _num(v["qx1"])), qz_lim=(_num(v["qz0"]), _num(v["qz1"])),

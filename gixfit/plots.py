@@ -172,12 +172,37 @@ def draw_multi(ax, res, peaks, qxy_lim=(-0.6, 2.0), qz_lim=(0.0, 2.0), label_top
     return n
 
 
-def draw_overlay(ax, results, peaks, qxy_lim=(-0.6, 2.0), qz_lim=(0.0, 2.0), label_top=8):
+def matched_circles(res, c, gx, gz, gI):
+    """positions/intensities of the predicted circles of component c that were matched to a detected spot.
+    Uses the recorded reflection index of each pair (rows['group']); for results without it, the predicted spot
+    nearest to the detected one.  An on-axis reflection is drawn on the wedge edge where its spot was found."""
+    gx, gz, gI = np.asarray(gx, float), np.asarray(gz, float), np.asarray(gI, float)
+    out = []
+    for r in res.pairs:
+        if r["component"] != c:
+            continue
+        x, z = (float(v) for v in res.geom.pixel_to_q(r["col"], r["row"]))
+        j = r.get("group")
+        if j is None or not 0 <= j < len(gx):
+            j = int(np.argmin(np.hypot(np.abs(gx) - abs(x), gz - z)))
+        px = float(gx[j])
+        if res.groups[c][j].side == 0 and px * x < 0:
+            px = -px
+        out.append((px, float(gz[j]), float(gI[j])))
+    if not out:
+        return np.zeros(0), np.zeros(0), np.zeros(0)
+    a = np.array(out)
+    return a[:, 0], a[:, 1], a[:, 2]
+
+
+def draw_overlay(ax, results, peaks, qxy_lim=(-0.6, 2.0), qz_lim=(0.0, 2.0), label_top=8, matched_only=False):
     """several fits on one map (each fit = a MultiResult; every crystal/texture gets its own colour).
 
     For separate fits shown together, a spot indexed by two or more of them is marked with a diamond (each fit
     claims it on its own; use a joint fit to make the crystals compete), and 'not indexed' means not indexed by ANY
     of them.  hkl labels: the `label_top` strongest visible indexed spots over all fits together (None = all).
+    matched_only: keep only the peaks found in BOTH the image and the structure - the predicted circles that were
+    matched to a detected spot, and those spots; predicted-only circles and spots not indexed are not drawn.
     Returns the number of labels drawn."""
     handles, candidates = [], []
     claimed = {}                                     # observed spot -> set of fits that index it
@@ -188,17 +213,22 @@ def draw_overlay(ax, results, peaks, qxy_lim=(-0.6, 2.0), qz_lim=(0.0, 2.0), lab
         for c, (gx, gz, gI) in enumerate(res.group_pos):                         # images); one crystal: per texture
             key = res.components[c][0] if by_phase else c
             col = COMP_COLORS[(base + key) % len(COMP_COLORS)]
-            if len(gx):
-                ax.scatter(gx, gz, s=15 + 140 * np.sqrt(np.clip(gI, 0, 4) / 4), facecolors="none", edgecolors=col,
-                           lw=1.0, alpha=0.9)
+            size = lambda I: 15 + 140 * np.sqrt(np.clip(I, 0, 4) / 4)
+            if len(gx) and matched_only:
+                mx, mz, mI = matched_circles(res, c, gx, gz, gI)
+                if len(mx):
+                    ax.scatter(mx, mz, s=size(mI), facecolors="none", edgecolors=col, lw=1.0, alpha=0.9)
+            elif len(gx):
+                ax.scatter(gx, gz, s=size(gI), facecolors="none", edgecolors=col, lw=1.0, alpha=0.9)
                 ax0 = np.array([g.side == 0 for g in res.groups[c]], bool)      # on-axis: either wedge edge
                 if ax0.any():
-                    ax.scatter(-gx[ax0], gz[ax0], s=15 + 140 * np.sqrt(np.clip(gI[ax0], 0, 4) / 4),
-                               facecolors="none", edgecolors=col, lw=1.0, alpha=0.9, linestyles="--")
+                    ax.scatter(-gx[ax0], gz[ax0], s=size(gI[ax0]), facecolors="none", edgecolors=col, lw=1.0,
+                               alpha=0.9, linestyles="--")
             cm = res.comp_metrics[c]
-            h, = ax.plot([], [], "o", mfc="none", mec=col, mew=1.5,
-                         label=f"{cm['phase']} {cm['contact']}: {cm['n_match']} spots, "
-                               f"missing {cm['n_strong_missing']}/{cm['n_strong_pred']}")
+            lab = (f"{cm['phase']} {cm['contact']}: {cm['n_match']} matched peaks" if matched_only else
+                   f"{cm['phase']} {cm['contact']}: {cm['n_match']} spots, "
+                   f"missing {cm['n_strong_missing']}/{cm['n_strong_pred']}")
+            h, = ax.plot([], [], "o", mfc="none", mec=col, mew=1.5, label=lab)
             handles.append(h)
             for r in (r for r in res.pairs if r["component"] == c):
                 x, z = res.geom.pixel_to_q(r["col"], r["row"])
@@ -218,7 +248,7 @@ def draw_overlay(ax, results, peaks, qxy_lim=(-0.6, 2.0), qz_lim=(0.0, 2.0), lab
             h, = ax.plot(bx, bz, "D", mfc="none", mec="#ffd400", ms=9, mew=1.5,
                          label=f"indexed by more than one fit ({len(both)})")
             handles.append(h)
-    unm = set(int(i) for i in results[0].unmatched_obs) if results else set()
+    unm = set(int(i) for i in results[0].unmatched_obs) if results and not matched_only else set()
     for res in results[1:]:
         unm &= set(int(i) for i in res.unmatched_obs)  # not indexed by ANY fit
     unm = np.array(sorted(unm), int)

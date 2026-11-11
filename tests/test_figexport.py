@@ -117,6 +117,24 @@ class FigExport(unittest.TestCase):
         self.assertEqual(sorted(t.get_text() for t in ax.texts), sorted(r["label"].split("/")[0] for r in top4))
         self.assertEqual({r["component"] for r in top4}, {0, 1})
 
+    def test_matched_peaks_only(self):
+        """export only peaks found in both the image and the structure: one circle per indexed spot, no x."""
+        def drawn(mo):
+            fig = Figure(figsize=(6.5, 5.2), dpi=72)
+            draw_map(fig, self.ses, self.ev, FigureOptions(matched_only=mo, qxy_lim=(-2, 3), qz_lim=(0, 3)))
+            ax = fig.axes[0]
+            circles = sum(len(c.get_offsets()) for c in ax.collections
+                          if len(c.get_facecolor()) == 0 or (c.get_facecolor()[:, 3] == 0).all())
+            xs = sum(len(l.get_xdata()) for l in ax.lines if l.get_marker() == "x")
+            return circles, xs
+        best = self.ev.best
+        all_c, _ = drawn(False)
+        only_c, only_x = drawn(True)
+        self.assertEqual(only_c, len(best.pairs))                   # one predicted circle per matched spot
+        self.assertEqual(only_x, 0)                                  # no spots that only exist in the image
+        self.assertGreater(all_c, only_c)                            # predicted-only circles were dropped
+        self.assertTrue(all("group" in r for r in best.pairs))
+
     def test_save_formats_and_size(self):
         from PIL import Image
         for ext in ("png", "tif", "pdf", "svg"):

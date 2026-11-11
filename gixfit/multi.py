@@ -297,7 +297,8 @@ class MultiProblem:
             c = int(comp[k]); g = groups[c][j - off[c]]; P = self.probs[c]
             rows.append(dict(
                 component=c, phase=self.phases[self.components[c][0]].name, contact=str(self.components[c][1]),
-                obs=i, label=g.label, I_pred=float(P.refl.I[g.members].sum()), area_obs=float(self.peaks.area[i]),
+                obs=i, group=int(j - off[c]), label=g.label, I_pred=float(P.refl.I[g.members].sum()),
+                area_obs=float(self.peaks.area[i]),
                 snr=float(self.peaks.snr[i]), col=float(self.peaks.col[i]), row=float(self.peaks.row[i]),
                 q_obs=float(q[i]), q_err=float(sq[i]), chi_obs=float(chi[i]), chi_err=float(schi[i]),
                 q_cif=float(gq0[k]), chi_cif=float(gc0[k]), q_fit=float(gq[k]), chi_fit=float(gc[k]),
