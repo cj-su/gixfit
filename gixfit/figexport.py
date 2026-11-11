@@ -141,10 +141,9 @@ def draw_map(fig: Figure, session, evaluation, opts: FigureOptions, qgrid=None):
     ax.set_xlabel(r"$q_{xy}$ ($\mathrm{\AA}^{-1}$)")
     ax.set_ylabel(r"$q_z$ ($\mathrm{\AA}^{-1}$)")
     ax.set_xlim(opts.qxy_lim); ax.set_ylim(opts.qz_lim)
-    best = getattr(evaluation, "best", None)
-    if opts.overlay and best is not None:
-        plots.draw_multi(ax, best, session.peaks, opts.qxy_lim, opts.qz_lim,
-                         label_top=label_count(opts), title=False)
+    fits = [e.best for e in as_list(evaluation) if getattr(e, "best", None) is not None]
+    if opts.overlay and fits:
+        plots.draw_overlay(ax, fits, session.peaks, opts.qxy_lim, opts.qz_lim, label_top=label_count(opts))
         leg = ax.get_legend()
         if leg is not None and not opts.legend:
             leg.remove()
@@ -168,6 +167,18 @@ def draw_map(fig: Figure, session, evaluation, opts: FigureOptions, qgrid=None):
 
 
 LABEL_CHOICES = ("none", "8", "20", "all")
+
+
+def as_list(evaluation):
+    """one evaluation, a list of them (several fits shown together) or None -> list."""
+    if evaluation is None:
+        return []
+    return list(evaluation) if isinstance(evaluation, (list, tuple)) else [evaluation]
+
+
+def display_name(evaluation, fallback="gixfit_map"):
+    names = [getattr(e, "name", "") for e in as_list(evaluation) if getattr(e, "name", "")]
+    return " + ".join(names) if names else fallback
 
 
 def label_count(opts: FigureOptions):
@@ -234,7 +245,7 @@ def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None, n_lab
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from PIL import Image, ImageTk
 
-    name = getattr(evaluation, "name", None) or os.path.splitext(os.path.basename(session.path))[0]
+    name = display_name(evaluation, os.path.splitext(os.path.basename(session.path))[0])
     opts = resolve(FigureOptions(title=name, n_labels=n_labels), session)
     state = {"qgrid": qgrid_for(session, opts, qgrid), "job": None}
     win = tk.Toplevel(parent)
@@ -391,7 +402,7 @@ def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None, n_lab
             o = current()
         except (ValueError, TypeError) as e:
             messagebox.showerror("gixfit", str(e), parent=win); return
-        base = (getattr(evaluation, "name", None) or "gixfit_map").replace(" ", "_")
+        base = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in display_name(evaluation))[:80]
         path = filedialog.asksaveasfilename(parent=win, title="Save figure", defaultextension=".png",
                                             initialdir=initial_dir, initialfile=f"{base}_map.png", filetypes=FORMATS)
         if not path:

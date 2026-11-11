@@ -392,6 +392,96 @@ def check_cif(session: Session, cif_path, settings=None, contact=None, log=None)
     return evaluate(session, st, settings, contact, True, log)
 
 
+@dataclass
+class JointFit:
+    """two or more crystals fitted together: they compete for the spots (each spot goes to at most one predicted
+    reflection of one crystal), every crystal gets its own refined cell and contact plane, and every spot is labelled
+    by the crystals that predict a reflection there (phase map).  Descriptive: no surrogate test."""
+    name: str
+    names: list
+    structs: list
+    best: object                 # MultiResult with one component per crystal
+    rows: list                   # phase_map rows (one per detected spot in the fitted q range)
+    counts: dict                 # label -> dict(n, w)  (w = share of sqrt-weighted spot intensity)
+    forced: list                 # crystals that had to be added (assumed present, not established)
+    seconds: float
+    joint: bool = True
+    z_chi: float = np.nan
+    z_q: float = np.nan
+    cell_only: bool = False
+    null: dict = None
+
+    @property
+    def fom(self):
+        return float(self.best.metrics["fom"])
+
+    @property
+    def verdict(self):
+        parts = [f"{n} {self.counts.get(n, {}).get('n', 0)}" for n in self.names]
+        shared = sum(d["n"] for k, d in self.counts.items() if " + " in k)
+        neither = self.counts.get("unassigned", {}).get("n", 0)
+        out = "phase map: " + ", ".join(parts) + f", shared {shared}, neither {neither}"
+        return out + (f"; added by force: {', '.join(self.forced)}" if self.forced else "")
+
+    @property
+    def change(self):
+        txt = []
+        for i, st in enumerate(self.structs):
+            c1 = self.best.cells[i]
+            if c1 is None:
+                continue
+            c0, c1 = st.cell.array(), c1.array()
+            txt.append(f"{st.name}: " + " ".join(f"{n}{100 * (c1[j] / c0[j] - 1):+.1f}%" for j, n in enumerate("abc")))
+        return " | ".join(txt)
+
+    @property
+    def report(self):
+        res = self.best
+        lines = [f"=== {self.name}: fitted together ({self.seconds:.0f} s)",
+                 "Crystals compete for the spots: each spot is assigned to at most one reflection of one crystal.",
+                 f"Crystals added by force (assumed present, not established by the data): "
+                 f"{', '.join(self.forced) or 'none'}"]
+        for cm in res.comp_metrics:
+            lines.append(f"  {cm['phase']} {cm['contact']}: {cm['n_match']} spots indexed, strong predicted spots "
+                         f"missing {cm['n_strong_missing']}/{cm['n_strong_pred']}, intensity rank corr "
+                         f"{cm['spearman_I']:.2f}")
+        for i, st in enumerate(self.structs):
+            if res.cells[i] is not None:
+                lines.append(f"  {st.name} refined cell: " + " ".join(f"{v:.3f}" for v in res.cells[i].array()))
+        lines.append("  phase map (spots; share of spot intensity):")
+        for lab, d in sorted(self.counts.items(), key=lambda kv: -kv[1]["n"]):
+            lines.append(f"    {lab:30s} {d['n']:4d}  {100 * d['w']:5.1f} %")
+        lines.append("  'A + B' = both crystals predict a reflection there (shared); 'unassigned' = neither. "
+                     "Descriptive: no surrogate test.")
+        return "\n".join(lines)
+
+
+def joint_fit(session: Session, structs, settings: Settings = None, log=None, min_I=0.02) -> JointFit:
+    """fit several crystals together (one texture each, contact planes searched) and label every spot."""
+    from .phasemap import fit_phases, phase_map, summary
+    from .crystal import PARAM_NAMES
+    log = log or (lambda *_: None)
+    s = deepcopy(settings or session.s)
+    s.validate()
+    if not session.matches_inputs(session.path, s):
+        raise ValueError("Image geometry or detection settings changed; find spots again before fitting.")
+    structs = [deepcopy(st) for st in structs]
+    if len(structs) < 2:
+        raise ValueError("Fitting together needs at least two crystals.")
+    t0 = time.time()
+    free = set().union(*[free_cell_for(st) for st in structs])
+    fc = replace(s.fit_config(), free_cell=tuple(n for n in PARAM_NAMES if n in free))
+    mc = s.multi_config(max_components=len(structs), n_null=0)
+    log(f"Fitting together: {', '.join(st.name for st in structs)} (one texture each, planes up to index "
+        f"{s.planes_maxidx})")
+    res, _, forced = fit_phases(structs, session.geom, session.peaks, session.mask, fc, mc, log=log)
+    rows = phase_map(res, session.peaks, min_I=min_I)
+    jf = JointFit(" + ".join(st.name for st in structs) + " (together)", [st.name for st in structs], structs,
+                  res, rows, summary(rows, res), forced, time.time() - t0)
+    log(jf.report)
+    return jf
+
+
 def compare_cifs(session: Session, cif_paths, settings=None, log=None):
     log = log or (lambda *_: None)
     structs = [load_cif(p) if isinstance(p, str) else p for p in cif_paths]

@@ -164,40 +164,70 @@ def draw_multi(ax, res, peaks, qxy_lim=(-0.6, 2.0), qz_lim=(0.0, 2.0), label_top
     """overlay of a MultiResult on an axis that already shows the q-map (used by the GUI and multi_fit_figure).
     hkl labels: the `label_top` strongest indexed spots INSIDE the plotted q range, counted over all components
     together (None = every visible indexed spot; 0 = none).  Returns the number of labels drawn."""
+    n = draw_overlay(ax, [res], peaks, qxy_lim, qz_lim, label_top)
+    if title:
+        m = res.metrics
+        ax.set_title(f"{m['n_components']} textures: {m['n_match']}/{m['n_obs']} spots indexed, fom {m['fom']:.2f}, "
+                     f"$\\rho_I$ {m['spearman_I_pooled']:.2f}", fontsize=12)
+    return n
+
+
+def draw_overlay(ax, results, peaks, qxy_lim=(-0.6, 2.0), qz_lim=(0.0, 2.0), label_top=8):
+    """several fits on one map (each fit = a MultiResult; every crystal/texture gets its own colour).
+
+    For separate fits shown together, a spot indexed by two or more of them is marked with a diamond (each fit
+    claims it on its own; use a joint fit to make the crystals compete), and 'not indexed' means not indexed by ANY
+    of them.  hkl labels: the `label_top` strongest visible indexed spots over all fits together (None = all).
+    Returns the number of labels drawn."""
     handles, candidates = [], []
-    for c, (gx, gz, gI) in enumerate(res.group_pos):
-        col = COMP_COLORS[c % len(COMP_COLORS)]
-        if len(gx):
-            ax.scatter(gx, gz, s=15 + 140 * np.sqrt(np.clip(gI, 0, 4) / 4), facecolors="none", edgecolors=col,
-                       lw=1.0, alpha=0.9)
-            ax0 = np.array([g.side == 0 for g in res.groups[c]], bool)      # on-axis: either wedge edge
-            if ax0.any():
-                ax.scatter(-gx[ax0], gz[ax0], s=15 + 140 * np.sqrt(np.clip(gI[ax0], 0, 4) / 4), facecolors="none",
-                           edgecolors=col, lw=1.0, alpha=0.9, linestyles="--")
-        cm = res.comp_metrics[c]
-        h, = ax.plot([], [], "o", mfc="none", mec=col, mew=1.5,
-                     label=f"{cm['phase']} {cm['contact']}: {cm['n_match']} spots, "
-                           f"missing {cm['n_strong_missing']}/{cm['n_strong_pred']}")
-        handles.append(h)
-        rows = [r for r in res.pairs if r["component"] == c]
-        for r in rows:
-            x, z = res.geom.pixel_to_q(r["col"], r["row"])
-            ax.plot(x, z, "+", color=col, ms=10, mew=1.8)
-            if qxy_lim[0] < x < qxy_lim[1] and qz_lim[0] < z < qz_lim[1]:     # visible first, then the strongest
-                candidates.append((-r["I_pred"], float(x), float(z), r["label"].split("/")[0], col))
+    claimed = {}                                     # observed spot -> set of fits that index it
+    base = 0                                         # colour index offset of the current fit
+    for ri, res in enumerate(results):
+        n_ph = len(getattr(res, "phase_names", None) or [0])
+        by_phase = n_ph > 1                          # crystals fitted together: one colour per CRYSTAL (stable across
+        for c, (gx, gz, gI) in enumerate(res.group_pos):                         # images); one crystal: per texture
+            key = res.components[c][0] if by_phase else c
+            col = COMP_COLORS[(base + key) % len(COMP_COLORS)]
+            if len(gx):
+                ax.scatter(gx, gz, s=15 + 140 * np.sqrt(np.clip(gI, 0, 4) / 4), facecolors="none", edgecolors=col,
+                           lw=1.0, alpha=0.9)
+                ax0 = np.array([g.side == 0 for g in res.groups[c]], bool)      # on-axis: either wedge edge
+                if ax0.any():
+                    ax.scatter(-gx[ax0], gz[ax0], s=15 + 140 * np.sqrt(np.clip(gI[ax0], 0, 4) / 4),
+                               facecolors="none", edgecolors=col, lw=1.0, alpha=0.9, linestyles="--")
+            cm = res.comp_metrics[c]
+            h, = ax.plot([], [], "o", mfc="none", mec=col, mew=1.5,
+                         label=f"{cm['phase']} {cm['contact']}: {cm['n_match']} spots, "
+                               f"missing {cm['n_strong_missing']}/{cm['n_strong_pred']}")
+            handles.append(h)
+            for r in (r for r in res.pairs if r["component"] == c):
+                x, z = res.geom.pixel_to_q(r["col"], r["row"])
+                ax.plot(x, z, "+", color=col, ms=10, mew=1.8)
+                claimed.setdefault(int(r["obs"]), set()).add(ri)
+                if qxy_lim[0] < x < qxy_lim[1] and qz_lim[0] < z < qz_lim[1]:   # visible first, then the strongest
+                    candidates.append((-r["I_pred"], float(x), float(z), r["label"].split("/")[0], col))
+        base += n_ph if by_phase else len(res.group_pos)
     candidates.sort(key=lambda t: t[0])
     shown = candidates if label_top is None else candidates[:max(0, int(label_top))]
     for _, x, z, lab, col in shown:
         ax.text(x + 0.015, z + 0.012, lab, color=col, fontsize=7.5, clip_on=True)
-    if len(res.unmatched_obs):
-        ux, uz = res.geom.pixel_to_q(peaks.col[res.unmatched_obs], peaks.row[res.unmatched_obs])
-        h, = ax.plot(ux, uz, "x", color="#ffd400", ms=6, mew=1.3, label=f"not indexed ({len(res.unmatched_obs)})")
+    if len(results) > 1:
+        both = np.array(sorted(i for i, f in claimed.items() if len(f) > 1), int)
+        if len(both):
+            bx, bz = results[0].geom.pixel_to_q(peaks.col[both], peaks.row[both])
+            h, = ax.plot(bx, bz, "D", mfc="none", mec="#ffd400", ms=9, mew=1.5,
+                         label=f"indexed by more than one fit ({len(both)})")
+            handles.append(h)
+    unm = set(int(i) for i in results[0].unmatched_obs) if results else set()
+    for res in results[1:]:
+        unm &= set(int(i) for i in res.unmatched_obs)  # not indexed by ANY fit
+    unm = np.array(sorted(unm), int)
+    if len(unm):
+        ux, uz = results[0].geom.pixel_to_q(peaks.col[unm], peaks.row[unm])
+        h, = ax.plot(ux, uz, "x", color="#ffd400", ms=6, mew=1.3, label=f"not indexed ({len(unm)})")
         handles.append(h)
-    m = res.metrics
-    ax.legend(handles=handles, loc="upper right", fontsize=8.5, framealpha=0.85)
-    if title:
-        ax.set_title(f"{m['n_components']} textures: {m['n_match']}/{m['n_obs']} spots indexed, fom {m['fom']:.2f}, "
-                     f"$\\rho_I$ {m['spearman_I_pooled']:.2f}", fontsize=12)
+    if handles:
+        ax.legend(handles=handles, loc="upper right", fontsize=8.5, framealpha=0.85)
     return len(shown)
 
 

@@ -24,9 +24,9 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 from matplotlib.colors import LogNorm
 
 from . import plots                      # noqa: F401  (sets the Times New Roman house style)
-from .engine import Settings, Session, check_cif, compare_cifs, identify, export
+from .engine import Settings, Session, check_cif, compare_cifs, identify, export, joint_fit
 from .peaks import to_qgrid
-from .figexport import LABEL_CHOICES, parse_label_choice, auto_qlims
+from .figexport import LABEL_CHOICES, parse_label_choice, auto_qlims, as_list
 from .crystal import PARAM_NAMES
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -56,6 +56,9 @@ class App:
         self.q = queue.Queue()
         self.session = None
         self.evals, self.flags = [], []
+        self.joints = []          # crystals fitted together (Fit selected together)
+        self._sel = []            # result rows shown on the map, in click order
+        self._shown_ev = None
         self.busy = False
         self._qgrid = None
         self.settings = Settings()
@@ -202,11 +205,24 @@ class App:
         self.tv_res = self._tree(self.nb_out, "Results",
                                  [("rank", 40), ("structure", 220), ("surrogate diagnostics", 330), ("fom", 60), ("z_chi", 60),
                                   ("z_q", 60), ("spots", 70), ("textures", 260), ("cell change", 300)])
-        self.tv_res.bind("<<TreeviewSelect>>", lambda *_: self._show_selected())
+        self.tv_res.configure(selectmode="none")                  # selection is managed by the clicks below
+        self.tv_res.bind("<Button-1>", self._click_result)
+        self.tv_res.bind("<Double-Button-1>", self._dismiss_result)
+        fr_hint = ttk.Frame(self.tv_res.master)
+        fr_hint.pack(side="bottom", fill="x", before=self.tv_res)
+        self.b_joint = ttk.Button(fr_hint, text="Fit selected together (phase map)", command=self._run_joint)
+        self.b_joint.pack(side="right", padx=4, pady=2)
+        ttk.Button(fr_hint, text="Clear selection", command=self._clear_selection).pack(side="right", pady=2)
+        ttk.Label(fr_hint, foreground="#555",
+                  text="Click results to show several on the map (each turns blue); double-click a blue row to "
+                       "remove it.").pack(side="left", padx=4)
         self.tv_err = self._tree(self.nb_out, "Spot errors vs CIF",
                                  [("texture", 150), ("hkl", 140), ("q obs", 70), ("q CIF", 70), ("dq CIF %", 75),
                                   ("q refined", 75), ("dq refined %", 85), ("chi obs", 65), ("chi calc", 65),
                                   ("d obs (A)", 70), ("intensity", 85)])
+        self.tv_phase = self._tree(self.nb_out, "Phase map",
+                                   [("spot", 45), ("q (A^-1)", 75), ("chi (deg)", 70), ("intensity", 85),
+                                    ("crystal", 170), ("assigned hkl", 150), ("hkl by crystal", 420)])
         self.tv_spots = self._tree(self.nb_out, "Spots",
                                    [("id", 40), ("q (A^-1)", 75), ("d (A)", 70), ("chi (deg)", 70), ("q_xy", 70),
                                     ("q_z", 70), ("intensity", 90), ("SNR", 70), ("used", 50)])
@@ -361,7 +377,7 @@ class App:
         self.busy = True
         self.pb.start(12)
         self.v_status.set(f"{name} ... (see 'Details / log')")
-        self.nb_out.select(3)
+        self.nb_out.select(4)                    # Details / log
 
         def run():
             try:
@@ -481,14 +497,26 @@ class App:
             return
         d = filedialog.askdirectory(title="Folder for the report")
         if d:
-            ses, evs, flags = self.session, list(self.evals), list(self.flags)
-            self._start("Export", lambda: (export(ses, evs, flags, d, log=self._logq), d)[1])
+            ses, evs, flags, joints = self.session, list(self.evals), list(self.flags), list(self.joints)
+
+            def job():
+                export(ses, evs, flags, d, log=self._logq)
+                for k, j in enumerate(joints, 1):           # joint fits: phase table + summary (not replayed)
+                    from .phasemap import write_csv
+                    tag = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in " + ".join(j.names))[:60]
+                    write_csv(j.rows, os.path.join(d, f"phase_map_{k}_{tag}.csv"))
+                    with open(os.path.join(d, f"phase_map_{k}_{tag}.txt"), "w", encoding="utf-8") as fh:
+                        fh.write(j.report)
+                    self._logq(f"phase map of the joint fit {j.name} written (not part of the replay bundle)")
+                return d
+            self._start("Export", job)
 
     # ------------------------------------------------------------------ results
     def _finish(self, name, res):
         if name == "Find spots":
-            self.session, self.evals, self.flags = res, [], []
+            self.session, self.evals, self.flags, self.joints, self._sel = res, [], [], [], []
             self._qgrid = None
+            self.tv_phase.delete(*self.tv_phase.get_children(""))
             self._fill_spots()
             self._fill_results()
             self._log("Structure hints (no CIF needed):")
@@ -496,9 +524,16 @@ class App:
                 self._log("  " + h)
             self.v_status.set(f"{len(res.peaks)} spots. Check one CIF, compare CIFs, or search your library.")
             self._draw()
-            self.nb_out.select(2)
+            self.nb_out.select(3)                    # Spots
         elif name == "Export":
             self.v_status.set(f"Report written to {res}")
+        elif name == "Fit together":
+            self.joints.append(res)
+            self._fill_results()
+            self._select([f"J{len(self.joints) - 1}"])
+            self._fill_phase_table(res)
+            self.v_status.set(f"Fitted together: {res.verdict}")
+            self.nb_out.select(2)
         else:
             self.evals, self.flags = res
             self._fill_results()
@@ -508,8 +543,7 @@ class App:
             best = self.evals[0] if self.evals else None
             self.v_status.set(f"{name} done. Best: {best.name} - {best.verdict}" if best else f"{name} done.")
             if self.evals:
-                first = self.tv_res.get_children("")[0]
-                self.tv_res.selection_set(first)
+                self._select([self.tv_res.get_children("")[0]])
             self.nb_out.select(0)
 
     def _fill_spots(self):
@@ -523,6 +557,7 @@ class App:
     def _fill_results(self):
         tv = self.tv_res
         tv.delete(*tv.get_children(""))
+        self._sel = []
         for i, e in enumerate(self.evals):
             m = e.best.metrics if e.best else {}
             change = ""
@@ -535,21 +570,65 @@ class App:
                 i + 1, name, e.verdict, f"{e.fom:.3f}", _f(e.z_chi), _f(e.z_q),
                 f"{m.get('n_match', 0)}/{m.get('n_obs', 0)}", e.best.label().replace(e.name, "") if e.best else "-",
                 change))
+        for k, j in enumerate(self.joints):
+            m = j.best.metrics
+            tv.insert("", "end", iid=f"J{k}", values=(
+                "joint", j.name, j.verdict, f"{j.fom:.3f}", "", "", f"{m['n_match']}/{m['n_obs']}",
+                j.best.label(), j.change))
 
-    def _show_selected(self):
-        sel = self.tv_res.selection()
-        if not sel:
-            return
-        e = self.evals[int(sel[0])]
-        self._draw(e)
+    # ------------------------------------------------------------------ selection (click = add, double-click = remove)
+    def _row_object(self, iid):
+        return self.joints[int(iid[1:])] if iid.startswith("J") else self.evals[int(iid)]
+
+    def _select(self, iids, focus=None):
+        self._sel = [i for i in iids if self.tv_res.exists(i)]
+        self.tv_res.selection_set(self._sel)
+        self._show_selected(focus)
+
+    def _click_result(self, event):
+        tv = self.tv_res
+        if tv.identify_region(event.x, event.y) not in ("cell", "tree"):
+            return None                                    # headings (sorting), separators: default behaviour
+        row = tv.identify_row(event.y)
+        if not row:
+            return "break"
+        if row not in self._sel:
+            self._select(self._sel + [row], focus=row)
+        return "break"
+
+    def _dismiss_result(self, event):
+        tv = self.tv_res
+        if tv.identify_region(event.x, event.y) not in ("cell", "tree"):
+            return None
+        row = tv.identify_row(event.y)
+        if row and row in self._sel:
+            self._select([i for i in self._sel if i != row])
+        return "break"
+
+    def _clear_selection(self):
+        self._select([])
+
+    def _show_selected(self, focus=None):
+        objs = [self._row_object(i) for i in self._sel]
+        self._draw(objs if len(objs) > 1 else (objs[0] if objs else None))
         tv = self.tv_err
         tv.delete(*tv.get_children(""))
-        if e.best:
-            for r in sorted(e.best.pairs, key=lambda r: r["q_obs"]):
-                tv.insert("", "end", values=(
-                    f"{r['contact']}", r["label"], f"{r['q_obs']:.4f}", f"{r['q_cif']:.4f}", f"{r['dq_cif_pct']:+.2f}",
-                    f"{r['q_fit']:.4f}", f"{r['dq_fit_pct']:+.2f}", f"{r['chi_obs']:.1f}", f"{r['chi_fit']:.1f}",
-                    f"{r['d_obs']:.3f}", f"{r['area_obs']:.3g}"))
+        for o in objs:
+            if o.best:
+                for r in sorted(o.best.pairs, key=lambda r: r["q_obs"]):
+                    tex = f"{r['contact']}" if len(objs) == 1 and not getattr(o, "joint", False) else                         f"{r.get('phase') or o.name} {r['contact']}"
+                    tv.insert("", "end", values=(
+                        tex, r["label"], f"{r['q_obs']:.4f}", f"{r['q_cif']:.4f}", f"{r['dq_cif_pct']:+.2f}",
+                        f"{r['q_fit']:.4f}", f"{r['dq_fit_pct']:+.2f}", f"{r['chi_obs']:.1f}", f"{r['chi_fit']:.1f}",
+                        f"{r['d_obs']:.3f}", f"{r['area_obs']:.3g}"))
+        if not objs:
+            return
+        e = self._row_object(focus) if focus else objs[0]
+        if getattr(e, "joint", False):
+            self._fill_phase_table(e)
+            self._log("")
+            self._log(e.report)
+            return
         self._log("")
         self._log(f"=== {e.name}: {e.verdict}")
         if e.best:
@@ -573,6 +652,37 @@ class App:
         if e.cell_only:
             self._log("  NOTE: this CIF has no atomic coordinates - only positions and systematic absences were "
                       "tested; intensities could not be used.")
+
+    # ------------------------------------------------------------------ crystals fitted together
+    def _run_joint(self):
+        if not self._need_session():
+            return
+        evs = [self._row_object(i) for i in self._sel if not i.startswith("J")]
+        if len(evs) < 2:
+            messagebox.showinfo("gixfit", "Click two (or more) CIF results so they turn blue, then press "
+                                          "'Fit selected together'."); return
+        if len(evs) > 4:
+            messagebox.showinfo("gixfit", "Select at most four crystals."); return
+        s = self._apply_options()
+        if s is None:
+            return
+        ses = self.session
+        structs = [deepcopy(e.struct) for e in evs]
+        names = []
+        for st in structs:                                  # unique names: they label the phase-map columns
+            base, k = st.name, 2
+            while st.name in names:
+                st.name = f"{base} ({k})"; k += 1
+            names.append(st.name)
+        self._start("Fit together", lambda: joint_fit(ses, structs, s, log=self._logq))
+
+    def _fill_phase_table(self, j):
+        tv = self.tv_phase
+        tv.delete(*tv.get_children(""))
+        for r in j.rows:
+            hkls = "; ".join(f"{n}: {r[f'hkl_{n}']}" for n in j.names if r.get(f"hkl_{n}"))
+            tv.insert("", "end", values=(r["spot"], f"{r['q']:.4f}", f"{r['chi_deg']:.1f}", f"{r['area']:.3g}",
+                                         r["label"], r["assigned_hkl"] or "", hkls))
 
     # ------------------------------------------------------------------ figure
     def _export_figure(self):
@@ -614,13 +724,19 @@ class App:
         ax.set_facecolor("#bdbdbd")
         ax.set_xlabel(r"$q_{xy}$ ($\AA^{-1}$)"); ax.set_ylabel(r"$q_z$ ($\AA^{-1}$)")
         ax.set_xlim(qlims[0]); ax.set_ylim(qlims[1])
-        if ev is None or ev.best is None:
+        evs = [e for e in as_list(ev) if getattr(e, "best", None) is not None]
+        if not evs:
             px, pz = ses.geom.pixel_to_q(ses.peaks.col, ses.peaks.row)
             ax.scatter(px, pz, s=40, facecolors="none", edgecolors="cyan", lw=1.0)
             ax.set_title(f"{os.path.basename(ses.path)}: {len(ses.peaks)} spots", fontsize=11)
         else:
-            plots.draw_multi(ax, ev.best, ses.peaks, qlims[0], qlims[1], label_top=self._n_labels(), title=False)
-            ax.set_title(f"{ev.name}: {ev.verdict}", fontsize=11)
+            plots.draw_overlay(ax, [e.best for e in evs], ses.peaks, qlims[0], qlims[1], label_top=self._n_labels())
+            if len(evs) == 1 and getattr(evs[0], "joint", False):
+                ax.set_title(evs[0].name, fontsize=11)      # the phase-map counts are in the Results row and log
+            elif len(evs) == 1:
+                ax.set_title(f"{evs[0].name}: {evs[0].verdict}", fontsize=11)
+            else:
+                ax.set_title(" + ".join(e.name for e in evs) + "  (each fitted separately)", fontsize=11)
         self.fig.tight_layout()
         self.canvas.draw_idle()
 

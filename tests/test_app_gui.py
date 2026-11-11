@@ -74,6 +74,25 @@ def main():
         print("   ", e.summary_line())
     app.fig.savefig(os.path.join(out, "03_compare.png"), dpi=110)
 
+    # click = add a result to the map, double-click = remove it (selection managed by the app, not by Tk)
+    from types import SimpleNamespace
+    rows = app.tv_res.get_children("")
+    def at(iid, col):
+        app.tv_res.see(iid); root.update()
+        x, y, w, h = app.tv_res.bbox(iid, col)
+        return x + 5, y + h // 2
+    assert app._sel == [rows[0]], app._sel                      # first result shown after a run
+    x, y = at(rows[1], "#2"); app.tv_res.event_generate("<Button-1>", x=x, y=y); root.update()
+    assert app._sel == [rows[0], rows[1]] and set(app.tv_res.selection()) == set(rows[:2]), app._sel
+    assert len(A.as_list(app._shown_ev)) == 2                    # both fits drawn on the map
+    app._dismiss_result(SimpleNamespace(x=x, y=y)); root.update()      # = <Double-Button-1> on row 2
+    assert app._sel == [rows[0]], app._sel
+    x, y = at(rows[1], "#5"); app.tv_res.event_generate("<Button-1>", x=x, y=y); root.update()
+    app._run_joint(); wait("Fit selected together")
+    assert app.joints and app._sel == ["J0"] and app.tv_phase.get_children(""), (app._sel, msgs)
+    print("   ", app.joints[0].verdict)
+    app.fig.savefig(os.path.join(out, "03b_joint.png"), dpi=110)
+
     app.lb_lib.delete(0, "end")
     app.lb_lib.insert("end", os.path.dirname(candidate))
     app.v_top.set("2")
