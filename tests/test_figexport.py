@@ -125,13 +125,13 @@ class FigExport(unittest.TestCase):
             ax = fig.axes[0]
             circles = sum(len(c.get_offsets()) for c in ax.collections
                           if len(c.get_facecolor()) == 0 or (c.get_facecolor()[:, 3] == 0).all())
-            xs = sum(len(l.get_xdata()) for l in ax.lines if l.get_marker() == "x")
+            xs = sum(len(l.get_xdata()) for l in ax.lines if l.get_marker() in ("x", "+"))
             return circles, xs
         best = self.ev.best
         all_c, _ = drawn(False)
         only_c, only_x = drawn(True)
         self.assertEqual(only_c, len(best.pairs))                   # one predicted circle per matched spot
-        self.assertEqual(only_x, 0)                                  # no spots that only exist in the image
+        self.assertEqual(only_x, 0)                                  # circles only: no + and no x
         self.assertGreater(all_c, only_c)                            # predicted-only circles were dropped
         self.assertTrue(all("group" in r for r in best.pairs))
 

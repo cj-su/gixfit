@@ -32,7 +32,7 @@ class FigureOptions:
     labels: bool = True                 # hkl labels of the strongest indexed spots
     n_labels: int | None = 8            # labels on the N strongest VISIBLE indexed spots, all components together; None = all
     legend: bool = True
-    matched_only: bool = False          # keep only peaks found in both the image and the structure
+    matched_only: bool = False          # keep only peaks found in both the image and the structure, as circles
     colorbar: bool = True
     title: str = ""
     cbar_label: str = "Intensity (counts)"
@@ -145,7 +145,7 @@ def draw_map(fig: Figure, session, evaluation, opts: FigureOptions, qgrid=None):
     fits = [e.best for e in as_list(evaluation) if getattr(e, "best", None) is not None]
     if opts.overlay and fits:
         plots.draw_overlay(ax, fits, session.peaks, opts.qxy_lim, opts.qz_lim, label_top=label_count(opts),
-                           matched_only=opts.matched_only)
+                           matched_only=opts.matched_only, crosses=not opts.matched_only)
         leg = ax.get_legend()
         if leg is not None and not opts.legend:
             leg.remove()
@@ -304,7 +304,7 @@ def open_dialog(parent, session, evaluation, qgrid=None, initial_dir=None, n_lab
     ttk.Label(left, text="(number of labels: the strongest indexed spots inside the q range, all crystals "
                          "together; it does not pick particular hkl. 'all' can overlap.)",
               foreground="#555", wraplength=330, justify="left").pack(anchor="w")
-    ttk.Checkbutton(left, text="Only matched peaks (found in the image AND the structure)",
+    ttk.Checkbutton(left, text="Only matched peaks, as circles (found in the image AND the structure)",
                     variable=v["matched"], command=lambda: schedule()).pack(anchor="w")
     for key, text in (("overlay", "Fit overlay (predicted / indexed / not indexed)"),
                       ("legend", "Legend"), ("colorbar", "Colour bar")):

@@ -195,14 +195,16 @@ def matched_circles(res, c, gx, gz, gI):
     return a[:, 0], a[:, 1], a[:, 2]
 
 
-def draw_overlay(ax, results, peaks, qxy_lim=(-0.6, 2.0), qz_lim=(0.0, 2.0), label_top=8, matched_only=False):
+def draw_overlay(ax, results, peaks, qxy_lim=(-0.6, 2.0), qz_lim=(0.0, 2.0), label_top=8, matched_only=False,
+                 crosses=True):
     """several fits on one map (each fit = a MultiResult; every crystal/texture gets its own colour).
 
     For separate fits shown together, a spot indexed by two or more of them is marked with a diamond (each fit
     claims it on its own; use a joint fit to make the crystals compete), and 'not indexed' means not indexed by ANY
     of them.  hkl labels: the `label_top` strongest visible indexed spots over all fits together (None = all).
     matched_only: keep only the peaks found in BOTH the image and the structure - the predicted circles that were
-    matched to a detected spot, and those spots; predicted-only circles and spots not indexed are not drawn.
+    matched to a detected spot; predicted-only circles and spots not indexed are not drawn.  crosses: the + on each
+    indexed spot (the figure export switches them off together with matched_only, leaving the circles only).
     Returns the number of labels drawn."""
     handles, candidates = [], []
     claimed = {}                                     # observed spot -> set of fits that index it
@@ -232,7 +234,8 @@ def draw_overlay(ax, results, peaks, qxy_lim=(-0.6, 2.0), qz_lim=(0.0, 2.0), lab
             handles.append(h)
             for r in (r for r in res.pairs if r["component"] == c):
                 x, z = res.geom.pixel_to_q(r["col"], r["row"])
-                ax.plot(x, z, "+", color=col, ms=10, mew=1.8)
+                if crosses:                                  # + = the detected spot (crosses=False: circles only)
+                    ax.plot(x, z, "+", color=col, ms=10, mew=1.8)
                 claimed.setdefault(int(r["obs"]), set()).add(ri)
                 if qxy_lim[0] < x < qxy_lim[1] and qz_lim[0] < z < qz_lim[1]:   # visible first, then the strongest
                     candidates.append((-r["I_pred"], float(x), float(z), r["label"].split("/")[0], col))
