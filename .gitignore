@@ -29,3 +29,6 @@ backups/
 
 # Presentation decks (contain figures from unpublished data)
 slides/
+
+# Licensed structures (CSD) and data placed in the library folder locally
+library/BINAP/
