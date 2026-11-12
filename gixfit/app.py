@@ -137,7 +137,7 @@ class App:
         r = ttk.Frame(t1); r.pack(fill="x", pady=2)
         ttk.Button(r, text="Add folder...", command=self._add_lib).pack(side="left")
         ttk.Button(r, text="Remove", command=lambda: self._lb_remove(self.lb_lib)).pack(side="left", padx=4)
-        ttk.Label(t1, text="Skip files matching (regex)").pack(anchor="w")
+        ttk.Label(t1, text="Skip CIF files whose name contains (separate words with |)").pack(anchor="w")
         self.v_excl = tk.StringVar(value="slab|vacuum")
         ttk.Entry(t1, textvariable=self.v_excl).pack(fill="x")
         ttk.Label(t1, text="Top N receive optional diagnostics").pack(anchor="w")
