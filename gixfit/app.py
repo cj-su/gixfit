@@ -46,6 +46,8 @@ class _Canvas(FigureCanvasTkAgg):
         pass
 
 
+NO_VARIANTS = "(single geometry)"      # shown in the geometry-variant box when the settings define only one
+
 CHANCE = {"Off (fast fit)": 0, "Preview (6; unstable)": 6, "Standard (100)": 100, "Extended (200)": 200}
 
 
@@ -89,8 +91,10 @@ class App:
         ttk.Button(fr, text="Load settings...", command=self._load_settings).pack(side="left")
         ttk.Button(fr, text="Save settings...", command=self._save_settings).pack(side="left", padx=4)
         ttk.Button(fr, text="Try demo...", command=self._open_demo).pack(side="left")
-        self.v_variant = tk.StringVar()
-        self.cb_variant = ttk.Combobox(fr, textvariable=self.v_variant, width=18, state="readonly")
+        # geometry variants: a config can list several calibrations ([[geometry_variants]]); pick one here
+        ttk.Label(fr, text="Geometry:").pack(side="left", padx=(6, 2))
+        self.v_variant = tk.StringVar(value=NO_VARIANTS)
+        self.cb_variant = ttk.Combobox(fr, textvariable=self.v_variant, width=14, state="disabled")
         self.cb_variant.pack(side="left")
         self.cb_variant.bind("<<ComboboxSelected>>", lambda *_: self._reload_variant())
         for i, (attr, label, _) in enumerate(FIELDS):
@@ -343,7 +347,8 @@ class App:
         self._settings_file = p
         s, img, variants = Settings.from_toml(p)
         self.cb_variant["values"] = variants
-        self.v_variant.set(variants[0] if variants else "")
+        self.v_variant.set(variants[0] if variants else NO_VARIANTS)
+        self.cb_variant.configure(state="readonly" if variants else "disabled")
         if variants:                                   # apply the first geometry variant
             s, img, _ = Settings.from_toml(p, variant=0)
         self.settings = s
@@ -356,7 +361,10 @@ class App:
         p = getattr(self, "_settings_file", None)
         if not p:
             return
-        i = list(self.cb_variant["values"]).index(self.v_variant.get())
+        values = list(self.cb_variant["values"])
+        if self.v_variant.get() not in values:
+            return
+        i = values.index(self.v_variant.get())
         s, _, _ = Settings.from_toml(p, variant=i)
         self.settings = s
         self._fill_fields(s)
@@ -488,30 +496,106 @@ class App:
         self._start("Identify", lambda: identify(ses, libs, s, excl, log=self._logq)[:2])
 
     def _export(self):
+        """Export report: a dialog chooses which results and which files to write."""
         if not self.session:
             messagebox.showinfo("gixfit", "Nothing to export yet."); return
         s = self._apply_options()
         if s is None:
             return
-        from dataclasses import asdict
-        if any(e.recipe.get("settings") != asdict(s) for e in self.evals):
-            messagebox.showinfo("gixfit", "Fit options changed. Run the fit again before exporting.")
-            return
-        d = filedialog.askdirectory(title="Folder for the report")
-        if d:
-            ses, evs, flags, joints = self.session, list(self.evals), list(self.flags), list(self.joints)
+        self.export_dialog = self._open_export_dialog(s)
 
-            def job():
-                export(ses, evs, flags, d, log=self._logq)
+    def _open_export_dialog(self, s):
+        from .engine import EXPORT_PARTS
+        order = list(self.tv_res.get_children(""))
+        sel = [i for i in order if i in self._sel]
+        win = tk.Toplevel(self.root)
+        win.title("Export report")
+        win.transient(self.root)
+        fr = ttk.Frame(win, padding=12); fr.pack(fill="both", expand=True)
+        prev = getattr(self, "_export_choices", {})
+        v_which = tk.StringVar(value="selected" if sel and len(sel) < len(order) else "all")
+        ttk.Label(fr, text="Results to include", font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
+        ttk.Radiobutton(fr, text=f"All results ({len(order)})", value="all", variable=v_which).pack(anchor="w")
+        rb = ttk.Radiobutton(fr, text=f"Only the selected (blue) rows ({len(sel)})", value="selected",
+                             variable=v_which)
+        rb.pack(anchor="w")
+        if not sel:
+            rb.state(["disabled"])
+        ttk.Separator(fr).pack(fill="x", pady=6)
+        ttk.Label(fr, text="Files to write", font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
+        try:
+            mb = os.path.getsize(self.session.path) / 1e6
+        except OSError:
+            mb = float("nan")
+        labels = dict(EXPORT_PARTS)
+        labels["replay"] = f"{EXPORT_PARTS['replay']}, about {mb:.0f} MB"
+        if self.joints:
+            labels["phase"] = "Phase maps of joint fits (CSV + text; not part of the replay bundle)"
+        v_parts = {k: tk.BooleanVar(value=prev.get(k, True)) for k in labels}
+        for k, text in labels.items():
+            ttk.Checkbutton(fr, text=text, variable=v_parts[k]).pack(anchor="w")
+        bt = ttk.Frame(fr); bt.pack(fill="x", pady=(4, 0))
+        ttk.Button(bt, text="All", command=lambda: [x.set(True) for x in v_parts.values()]).pack(side="left")
+        ttk.Button(bt, text="None", command=lambda: [x.set(False) for x in v_parts.values()]).pack(side="left",
+                                                                                                    padx=4)
+        ttk.Separator(fr).pack(fill="x", pady=6)
+        ttk.Label(fr, text="Folder (use an empty folder, not your CIF library)").pack(anchor="w")
+        rf = ttk.Frame(fr); rf.pack(fill="x")
+        v_dir = tk.StringVar(value=prev.get("folder", ""))
+        ttk.Entry(rf, textvariable=v_dir, width=52).pack(side="left", fill="x", expand=True)
+        ttk.Button(rf, text="Browse...",
+                   command=lambda: v_dir.set(filedialog.askdirectory(parent=win, title="Folder for the report")
+                                             or v_dir.get())).pack(side="left", padx=4)
+        v_msg = tk.StringVar(value="")
+        ttk.Label(fr, textvariable=v_msg, foreground="#a33", wraplength=460).pack(anchor="w", pady=(6, 0))
+
+        def go():
+            d = v_dir.get().strip()
+            parts = {k for k, x in v_parts.items() if x.get()}
+            if not parts:
+                v_msg.set("Tick at least one item to export."); return False
+            if not d:
+                v_msg.set("Choose a folder for the report."); return False
+            keep = sel if v_which.get() == "selected" else order
+            evs = [self.evals[int(i)] for i in keep if not i.startswith("J")]
+            joints = [self.joints[int(i[1:])] for i in keep if i.startswith("J")]
+            from dataclasses import asdict
+            if any(e.recipe.get("settings") != asdict(s) for e in evs):
+                v_msg.set("Fit options changed since these results were made. Run the fit again before exporting.")
+                return False
+            if "cifs" in parts and os.path.isdir(d) and any(f.lower().endswith(".cif") for f in os.listdir(d)):
+                if not messagebox.askyesno("gixfit", "This folder already contains CIF files (a CIF library?). The "
+                                                     "refined CIFs written here would be ranked as extra candidates "
+                                                     "by 'Rank candidate CIFs'.\n\nExport here anyway?", parent=win):
+                    return False
+            self._export_choices = dict({k: x.get() for k, x in v_parts.items()}, folder=d)
+            win.destroy()
+            self._run_export(d, evs, joints, parts)
+            return True
+
+        bf = ttk.Frame(fr); bf.pack(fill="x", pady=(8, 0))
+        ttk.Button(bf, text="Export", command=go).pack(side="right")
+        ttk.Button(bf, text="Cancel", command=win.destroy).pack(side="right", padx=4)
+        win.go, win.v_which, win.v_parts, win.v_dir, win.v_msg = go, v_which, v_parts, v_dir, v_msg
+        return win
+
+    def _run_export(self, d, evs, joints, parts):
+        ses, flags = self.session, list(self.flags)
+        engine_parts = parts & {"workbook", "summary", "maps", "cifs", "settings", "replay"}
+
+        def job():
+            written = export(ses, evs, flags, d, log=self._logq, parts=engine_parts) if engine_parts else []
+            if "phase" in parts:
+                from .phasemap import write_csv
                 for k, j in enumerate(joints, 1):           # joint fits: phase table + summary (not replayed)
-                    from .phasemap import write_csv
                     tag = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in " + ".join(j.names))[:60]
                     write_csv(j.rows, os.path.join(d, f"phase_map_{k}_{tag}.csv"))
                     with open(os.path.join(d, f"phase_map_{k}_{tag}.txt"), "w", encoding="utf-8") as fh:
                         fh.write(j.report)
+                    written += [f"phase_map_{k}_{tag}.csv", f"phase_map_{k}_{tag}.txt"]
                     self._logq(f"phase map of the joint fit {j.name} written (not part of the replay bundle)")
-                return d
-            self._start("Export", job)
+            return d, written
+        self._start("Export", job)
 
     # ------------------------------------------------------------------ results
     def _finish(self, name, res):
@@ -528,7 +612,8 @@ class App:
             self._draw()
             self.nb_out.select(3)                    # Spots
         elif name == "Export":
-            self.v_status.set(f"Report written to {res}")
+            d, written = res
+            self.v_status.set(f"Report written to {d}: {len(written)} file(s)")
         elif name == "Fit together":
             self.joints.append(res)
             self._fill_results()

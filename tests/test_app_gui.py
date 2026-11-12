@@ -100,6 +100,28 @@ def main():
     assert o.qxy_lim == (0.3, 1.2) and o.qz_lim == (0.1, 0.9), (o.qxy_lim, o.qz_lim)
     app.fig_dialog.destroy(); app._draw(app._shown_ev)
 
+    # Export report dialog: choose results and files
+    app._select([rows[0]])
+    win = app._export(); win = app.export_dialog
+    assert win.v_which.get() == "selected"
+    win.v_parts["replay"].set(False); win.v_parts["cifs"].set(False); win.v_parts["settings"].set(False)
+    rep2 = os.path.join(out, "report_choices")
+    win.v_dir.set(rep2)
+    assert win.go(); wait("Export (selected row, chosen files)")
+    files = sorted(os.listdir(rep2))
+    assert "gixfit_results.xlsx" in files and not any(f.endswith(".cif") for f in files) \
+        and "run_manifest.json" not in files and "inputs" not in files, files
+    assert sum(f.endswith("_map.png") for f in files) == 1, files      # only the selected result
+    lib = os.path.join(out, "cif_library"); os.makedirs(lib, exist_ok=True)
+    open(os.path.join(lib, "x.cif"), "w").close()
+    asked = []
+    mb_yesno = messagebox.askyesno
+    messagebox.askyesno = lambda *a, **k: asked.append(a) or False
+    win = app._export(); win = app.export_dialog; win.v_parts["cifs"].set(True); win.v_dir.set(lib)
+    assert win.go() is False and asked and sorted(os.listdir(lib)) == ["x.cif"]    # warned, nothing written
+    messagebox.askyesno = mb_yesno
+    win.destroy()
+
     # q range boxes act immediately: arcs on the map, 'used' spots, results fitted with another range greyed
     q0, q1 = app.vars["q_min"].get(), app.vars["q_max"].get()
     app.vars["q_min"].set("0.35"); app.vars["q_max"].set("0.36"); app._on_qrange(); root.update()

@@ -52,7 +52,7 @@ def environment() -> dict:
     return dict(gixfit=__version__, python=platform.python_version(), platform=platform.platform(), packages=deps)
 
 
-def write_manifest(session, evaluations, flags, out_dir: str) -> Path:
+def write_manifest(session, evaluations, flags, out_dir: str, write_settings=True) -> Path:
     """Copy the image and capture the exact in-memory candidate models and fitting recipes."""
     folder = Path(out_dir)
     folder.mkdir(parents=True, exist_ok=True)
@@ -84,7 +84,8 @@ def write_manifest(session, evaluations, flags, out_dir: str) -> Path:
     temporary.write_text(json.dumps(record, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8")
     temporary.replace(destination)
     # Handy standalone geometry/spot settings; the manifest carries candidate-specific fit settings.
-    session.s.to_toml(folder / "settings.toml", record["image"]["path"])
+    if write_settings:
+        session.s.to_toml(folder / "settings.toml", record["image"]["path"])
     return destination
 
 

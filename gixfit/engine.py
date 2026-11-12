@@ -551,13 +551,32 @@ def identify(session: Session, library_dirs, settings=None, exclude=r"slab|vacuu
 
 
 # ---------------------------------------------------------------------- export
-def export(session: Session, evs, flags, out_dir, log=None):
+EXPORT_PARTS = {
+    "workbook": "Results workbook (gixfit_results.xlsx: ranking, spots, matched spots per CIF)",
+    "summary": "Summary text (summary.txt)",
+    "maps": "Fitted maps (one PNG per CIF)",
+    "cifs": "Refined CIFs (one .cif per CIF)",
+    "settings": "Settings file (settings.toml, reload with 'Load settings')",
+    "replay": "Replay bundle (run_manifest.json + a copy of the image)",
+}
+
+
+def export(session: Session, evs, flags, out_dir, log=None, parts=None):
+    """write the report; `parts` = subset of EXPORT_PARTS keys (None = everything).  Returns the files written."""
     import pandas as pd
     from . import plots
     log = log or (lambda *_: None)
+    parts = set(EXPORT_PARTS) if parts is None else set(parts)
+    unknown = parts - set(EXPORT_PARTS)
+    if unknown:
+        raise ValueError(f"Unknown export parts: {sorted(unknown)}")
     os.makedirs(out_dir, exist_ok=True)
-    from .replay import write_manifest
-    write_manifest(session, evs, flags, out_dir)
+    before = set(os.listdir(out_dir))
+    if "replay" in parts:
+        from .replay import write_manifest
+        write_manifest(session, evs, flags, out_dir, write_settings="settings" in parts)
+    elif "settings" in parts:
+        session.s.to_toml(os.path.join(out_dir, "settings.toml"), os.path.abspath(session.path))
     rows, pair_tables = [], {}
     for i, e in enumerate(evs):
         m = e.best.metrics if e.best else {}
@@ -574,40 +593,46 @@ def export(session: Session, evs, flags, out_dir, log=None):
         rows.append(row)
         if e.best and e.best.pairs:
             pair_tables[f"{i + 1:02d}_{re.sub(r'[^A-Za-z0-9]+', '_', e.name)}"[:31]] = pd.DataFrame(e.best.pairs)
-    with pd.ExcelWriter(os.path.join(out_dir, "gixfit_results.xlsx")) as w:
-        pd.DataFrame(rows).to_excel(w, sheet_name="ranking", index=False)
-        pd.DataFrame(session.peak_rows()).to_excel(w, sheet_name="spots", index=False)
-        for k, df in pair_tables.items():
-            df.sort_values("q_obs").to_excel(w, sheet_name=k, index=False)
-        pd.DataFrame({"notes": [
-            "outcome: which supplementary surrogate diagnostics were passed (standardized surrogate score z >= 3 "
-            "against observable chi reassignments and against |q| jittered by +-3%); a descriptive outcome, not an "
-            "identification of the structure.",
-            "Ranking is by FOM, not surrogate diagnostic outcome. Compare fits made with the same settings.",
-            "Cell errors are local curvature estimates conditional on assignments, priors and geometry; "
-            "they are not validated confidence intervals or total calibration uncertainties.",
-            "fom = (indexed fraction of spot intensity) x (1 - fraction of the strongest predicted spots that are absent)",
-            "dq_cif_pct = (q_obs - q_CIF)/q_CIF per spot (the CIF error); dq_fit_pct after refining the cell",
-            f"indistinguishable pairs (same diffraction, e.g. R/S enantiomers): {flags or 'none'}"]}).to_excel(
-            w, sheet_name="notes", index=False)
-    with open(os.path.join(out_dir, "summary.txt"), "w", encoding="utf-8") as fh:
-        fh.write(f"image: {session.path}\nspots: {len(session.peaks)}\n\nHints (no CIF needed):\n")
-        fh.write("\n".join("  " + h for h in session.hints()) + "\n\n")
-        if flags:
-            fh.write("Indistinguishable by diffraction: " + "; ".join(f"{a} = {b}" for a, b, _ in flags) + "\n\n")
-        for i, e in enumerate(evs):
-            fh.write(f"#{i + 1} {e.summary_line()}\n")
-            if e.best:
-                c = e.best.cells[0]
-                fh.write(f"     CIF     {e.struct.cell}\n     refined {c}\n")
+    if "workbook" in parts:
+        with pd.ExcelWriter(os.path.join(out_dir, "gixfit_results.xlsx")) as w:
+            pd.DataFrame(rows).to_excel(w, sheet_name="ranking", index=False)
+            pd.DataFrame(session.peak_rows()).to_excel(w, sheet_name="spots", index=False)
+            for k, df in pair_tables.items():
+                df.sort_values("q_obs").to_excel(w, sheet_name=k, index=False)
+            pd.DataFrame({"notes": [
+                "outcome: which supplementary surrogate diagnostics were passed (standardized surrogate score z >= 3 "
+                "against observable chi reassignments and against |q| jittered by +-3%); a descriptive outcome, not an "
+                "identification of the structure.",
+                "Ranking is by FOM, not surrogate diagnostic outcome. Compare fits made with the same settings.",
+                "Cell errors are local curvature estimates conditional on assignments, priors and geometry; "
+                "they are not validated confidence intervals or total calibration uncertainties.",
+                "fom = (indexed fraction of spot intensity) x (1 - fraction of the strongest predicted spots that are absent)",
+                "dq_cif_pct = (q_obs - q_CIF)/q_CIF per spot (the CIF error); dq_fit_pct after refining the cell",
+                f"indistinguishable pairs (same diffraction, e.g. R/S enantiomers): {flags or 'none'}"]}).to_excel(
+                w, sheet_name="notes", index=False)
+    if "summary" in parts:
+        with open(os.path.join(out_dir, "summary.txt"), "w", encoding="utf-8") as fh:
+            fh.write(f"image: {session.path}\nspots: {len(session.peaks)}\n\nHints (no CIF needed):\n")
+            fh.write("\n".join("  " + h for h in session.hints()) + "\n\n")
+            if flags:
+                fh.write("Indistinguishable by diffraction: " + "; ".join(f"{a} = {b}" for a, b, _ in flags) + "\n\n")
+            for i, e in enumerate(evs):
+                fh.write(f"#{i + 1} {e.summary_line()}\n")
+                if e.best:
+                    c = e.best.cells[0]
+                    fh.write(f"     CIF     {e.struct.cell}\n     refined {c}\n")
     for i, e in enumerate(evs):
         if not e.best:
             continue
         tag = f"{i + 1:02d}_{re.sub(r'[^A-Za-z0-9]+', '_', e.name)}"
-        plots.multi_fit_figure(session.D, session.mask, e.best, session.peaks, os.path.join(out_dir, f"{tag}_map.png"))
-        if e.null:
-            plots.fom_vs_k_figure(dict(hist=e.hist, null=e.null, model=e.name, geometry=""),
-                                  os.path.join(out_dir, f"{tag}_vs_chance.png"))
-        if e.best.cells[0] is not None and e.struct.has_atoms:
+        if "maps" in parts:
+            plots.multi_fit_figure(session.D, session.mask, e.best, session.peaks,
+                                   os.path.join(out_dir, f"{tag}_map.png"))
+            if e.null:
+                plots.fom_vs_k_figure(dict(hist=e.hist, null=e.null, model=e.name, geometry=""),
+                                      os.path.join(out_dir, f"{tag}_vs_chance.png"))
+        if "cifs" in parts and e.best.cells[0] is not None and e.struct.has_atoms:
             write_cif(e.struct.with_cell(e.best.cells[0]), os.path.join(out_dir, f"{tag}_refined.cif"), e.name)
-    log(f"Report written to {out_dir}")
+    written = sorted(set(os.listdir(out_dir)) - before)
+    log(f"Report written to {out_dir}: {', '.join(written) if written else 'no new files'}")
+    return written
