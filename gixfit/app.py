@@ -37,11 +37,44 @@ DEFAULT_LIBS = [p for p in (
 FIELDS = [  # (attribute, label, kind)
     ("wavelength", "Wavelength (A)", float), ("sdd_mm", "Sample-detector (mm)", float),
     ("pixel_mm", "Pixel size (mm)", float), ("x0", "Beam centre column x0", float),
-    ("y0", "Beam centre row y0", float), ("alpha_i_deg", "Incident angle (deg, blank = file name / EDF)", float),
-    ("sample_length_mm", "Sample length along beam (mm, 0 = off)", float),
+    ("y0", "Beam centre row y0", float), ("alpha_i_deg", "Incident angle (deg)", float),
+    ("sample_length_mm", "Sample length (mm)", float),
     ("qz_min", "Mask below q_z (horizon)", float), ("threshold", "Spot threshold (sigma)", float),
     ("q_min", "q min used (A^-1)", float), ("q_max", "q max used (A^-1)", float),
 ]
+HINTS = {   # hover text for the geometry boxes (keeps the labels short so the boxes stay visible)
+    "alpha_i_deg": "Blank = read it from the file name (_th0.120) or the EDF header.",
+    "sample_length_mm": ("Substrate length along the beam direction, in mm (e.g. 15 for a 15 mm substrate).\n"
+                         "At grazing incidence the whole sample is lit, so grains at its front and back edges put the\n"
+                         "same reflection at |q| up to +-(L/2)/(sample-detector) apart. The matching window grows with q\n"
+                         "accordingly and a reflection may index two spots. 0 = off (paper settings)."),
+    "qz_min": "Spots below this q_z (the sample horizon) are masked.",
+}
+
+
+class _Tip:
+    """minimal hover tooltip."""
+    def __init__(self, widget, text):
+        self.w, self.text, self.tip = widget, text, None
+        widget.bind("<Enter>", self.show)
+        widget.bind("<Leave>", self.hide)
+
+    def show(self, _=None):
+        if self.tip:
+            return
+        x, y = self.w.winfo_rootx() + 10, self.w.winfo_rooty() + self.w.winfo_height() + 4
+        self.tip = tk.Toplevel(self.w)
+        self.tip.wm_overrideredirect(True)
+        self.tip.wm_geometry(f"+{x}+{y}")
+        tk.Label(self.tip, text=self.text, justify="left", background="#ffffe0", relief="solid", borderwidth=1,
+                 padx=4, pady=2).pack()
+
+    def hide(self, _=None):
+        if self.tip:
+            self.tip.destroy()
+            self.tip = None
+
+
 class _Canvas(FigureCanvasTkAgg):
     def _update_device_pixel_ratio(self, event=None):      # see App._build: the figure dpi already matches
         pass
@@ -81,6 +114,8 @@ class App:
         right = ttk.Frame(pw, padding=4)
         pw.add(left, weight=0)
         pw.add(right, weight=1)
+        # give the controls their full width (with large fonts / DPI scaling the default sash can hide the boxes)
+        self.root.after(200, lambda: pw.sashpos(0, left.winfo_reqwidth()))
 
         # --- 1 image + detector
         f1 = ttk.LabelFrame(left, text="1  Image and detector", padding=6)
@@ -96,20 +131,26 @@ class App:
         ttk.Button(fr, text="Save settings...", command=self._save_settings).pack(side="left", padx=4)
         ttk.Button(fr, text="Try demo...", command=self._open_demo).pack(side="left")
         # geometry variants: a config can list several calibrations ([[geometry_variants]]); pick one here
-        ttk.Label(fr, text="Geometry:").pack(side="left", padx=(6, 2))
+        fr = ttk.Frame(f1)
+        fr.grid(row=3, column=0, columnspan=3, sticky="w", pady=(0, 2))
+        ttk.Label(fr, text="Geometry:").pack(side="left", padx=(0, 2))
         self.v_variant = tk.StringVar(value=NO_VARIANTS)
         self.cb_variant = ttk.Combobox(fr, textvariable=self.v_variant, width=14, state="disabled")
         self.cb_variant.pack(side="left")
         self.cb_variant.bind("<<ComboboxSelected>>", lambda *_: self._reload_variant())
         for i, (attr, label, _) in enumerate(FIELDS):
-            ttk.Label(f1, text=label).grid(row=3 + i, column=0, sticky="w")
+            lb = ttk.Label(f1, text=label + (" (?)" if attr in HINTS else ""))
+            lb.grid(row=4 + i, column=0, sticky="w")
             v = tk.StringVar()
-            ttk.Entry(f1, textvariable=v, width=12).grid(row=3 + i, column=1, columnspan=2, sticky="w")
+            en = ttk.Entry(f1, textvariable=v, width=12)
+            en.grid(row=4 + i, column=1, columnspan=2, sticky="w")
+            if attr in HINTS:
+                _Tip(lb, HINTS[attr]); _Tip(en, HINTS[attr])
             self.vars[attr] = v
         for key in ("q_min", "q_max", "sample_length_mm"):   # fitted q range / window: arcs, used spots, stale results
             self.vars[key].trace_add("write", lambda *_: self._schedule_qrange())
         self.b_find = ttk.Button(f1, text="Find spots", command=self._run_find)
-        self.b_find.grid(row=4 + len(FIELDS), column=0, columnspan=3, sticky="we", pady=(6, 0))
+        self.b_find.grid(row=5 + len(FIELDS), column=0, columnspan=3, sticky="we", pady=(6, 0))
 
         # --- options
         fo = ttk.LabelFrame(left, text="Options", padding=6)
