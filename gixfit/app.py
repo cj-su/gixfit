@@ -38,6 +38,7 @@ FIELDS = [  # (attribute, label, kind)
     ("wavelength", "Wavelength (A)", float), ("sdd_mm", "Sample-detector (mm)", float),
     ("pixel_mm", "Pixel size (mm)", float), ("x0", "Beam centre column x0", float),
     ("y0", "Beam centre row y0", float), ("alpha_i_deg", "Incident angle (deg, blank = file name / EDF)", float),
+    ("sample_length_mm", "Sample length along beam (mm, 0 = off)", float),
     ("qz_min", "Mask below q_z (horizon)", float), ("threshold", "Spot threshold (sigma)", float),
     ("q_min", "q min used (A^-1)", float), ("q_max", "q max used (A^-1)", float),
 ]
@@ -105,7 +106,7 @@ class App:
             v = tk.StringVar()
             ttk.Entry(f1, textvariable=v, width=12).grid(row=3 + i, column=1, columnspan=2, sticky="w")
             self.vars[attr] = v
-        for key in ("q_min", "q_max"):              # the fitted q range: arcs, 'used' spots, stale results - live
+        for key in ("q_min", "q_max", "sample_length_mm"):   # fitted q range / window: arcs, used spots, stale results
             self.vars[key].trace_add("write", lambda *_: self._schedule_qrange())
         self.b_find = ttk.Button(f1, text="Find spots", command=self._run_find)
         self.b_find.grid(row=4 + len(FIELDS), column=0, columnspan=3, sticky="we", pady=(6, 0))
@@ -300,6 +301,9 @@ class App:
             txt = self.vars[attr].get().strip()
             if txt == "" and attr in ("alpha_i_deg",):
                 setattr(s, attr, None)
+                continue
+            if txt == "" and attr == "sample_length_mm":         # blank = point sample (off)
+                setattr(s, attr, 0.0)
                 continue
             try:
                 setattr(s, attr, kind(txt))
@@ -724,7 +728,16 @@ class App:
         if getattr(o, "joint", False):
             return getattr(o, "window", None)
         st = (getattr(o, "recipe", None) or {}).get("settings") or {}
-        return (st.get("match_q", 0.015), st.get("match_chi", 4.0)) if st else None
+        return (st.get("match_q", 0.015), st.get("match_chi", 4.0), st.get("sample_length_mm", 0.0) or 0.0) if st else None
+
+    def _window_now(self):
+        """(match_q, match_chi, sample length) as chosen now, or None while the sample-length box is not a number."""
+        w = WINDOWS.get(self.v_window.get())
+        try:
+            L = float(self.vars["sample_length_mm"].get() or 0.0)
+        except ValueError:
+            return None
+        return None if w is None else (w[0], w[1], L)
 
     def _mark_stale(self):
         """grey the result rows fitted with another q range than the one in the boxes; returns their count."""
@@ -734,7 +747,7 @@ class App:
         for iid in self.tv_res.get_children(""):
             fr = self._fit_qrange(self._row_object(iid))
             stale = qr is not None and fr is not None and (abs(fr[0] - qr[0]) > 1e-9 or abs(fr[1] - qr[1]) > 1e-9)
-            fw, w = self._fit_window(self._row_object(iid)), WINDOWS.get(self.v_window.get())
+            fw, w = self._fit_window(self._row_object(iid)), self._window_now()
             stale = stale or (fw is not None and w is not None and tuple(fw) != tuple(w))
             self.tv_res.item(iid, tags=("stale",) if stale else ())
             n += stale

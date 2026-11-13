@@ -238,9 +238,13 @@ def draw_overlay(ax, results, peaks, qxy_lim=(-0.6, 2.0), qz_lim=(0.0, 2.0), lab
                     ax.plot(x, z, "+", color=col, ms=10, mew=1.8)
                 claimed.setdefault(int(r["obs"]), set()).add(ri)
                 if qxy_lim[0] < x < qxy_lim[1] and qz_lim[0] < z < qz_lim[1]:   # visible first, then the strongest
-                    candidates.append((-r["I_pred"], float(x), float(z), r["label"].split("/")[0], col))
+                    key = (ri, c, r.get("group", r["label"]), r["chi_obs"] < 0)   # one label per reflection & side:
+                    candidates.append((-r["I_pred"], -r.get("area_obs", 0.0), float(x), float(z),   # a split pair
+                                       r["label"].split("/")[0], col, key))                       # is labelled once
         base += n_ph if by_phase else len(res.group_pos)
-    candidates.sort(key=lambda t: t[0])
+    candidates.sort(key=lambda t: t[:2])
+    seen = set()
+    candidates = [t[0:1] + t[2:6] for t in candidates if not (t[6] in seen or seen.add(t[6]))]
     shown = candidates if label_top is None else candidates[:max(0, int(label_top))]
     for _, x, z, lab, col in shown:
         ax.text(x + 0.015, z + 0.012, lab, color=col, fontsize=7.5, clip_on=True)

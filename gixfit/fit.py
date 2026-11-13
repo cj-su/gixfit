@@ -37,6 +37,8 @@ class FitConfig:
     merge_tol: float = 0.008                    # A^-1, reflections closer than this = one predicted peak
     tol_schedule: tuple = ((0.05, 10.0), (0.03, 6.0), (0.015, 4.0))   # (tol_q A^-1, tol_chi deg)
     q_floor: float = 0.002
+    spots_per_reflection: int = 1               # >1: a reflection may index that many spots (long-sample split spots)
+    q_rel: float = 0.0                          # q window/uncertainty growing with q: (sample length / 2) / sdd
     chi_floor_deg: float = 0.7
     intensity_prior: float = 0.05               # cost added per decade below the strongest reflection
     free_cell: tuple = PARAM_NAMES
@@ -95,21 +97,33 @@ def fold_chi(chi_obs, side0):
     return np.where(side0, np.abs(chi_obs), chi_obs)
 
 
-def match_spots(q, chi, gq, gchi, gI, side0, tol_q, tol_chi, prior):
+def q_tol(tol_q, gq, q_rel):
+    """|q| window of a predicted reflection at gq: the fixed window combined with the footprint term q_rel * gq.
+    Grains anywhere along an illuminated sample of length L scatter from up to L/2 before or after the calibrated
+    sample position, which scales their spot positions on the detector by up to (L/2)/sdd."""
+    return np.hypot(tol_q, q_rel * np.asarray(gq, float)) if q_rel else tol_q
+
+
+def match_spots(q, chi, gq, gchi, gI, side0, tol_q, tol_chi, prior, copies=1):
     """one-to-one assignment of observed spots (q, chi) to predicted groups (gq, gchi, rel. intensity gI).
 
     Cost (dq/tol_q)^2 + (dchi/tol_chi)^2, gated at 1, plus prior * -log10(gI).  An on-axis group (side0) is seen on
     BOTH edges of the missing wedge, so it gets two columns: one takes a spot with chi >= 0, the other a spot with
-    chi < 0 (compared on |chi|).  Returns (row index into q, group index) pairs; a group index can appear twice."""
+    chi < 0 (compared on |chi|).  tol_q may be one value or one per group.  Returns (row index into q, group index)
+    pairs; a group index can appear twice.  copies > 1: every group (and wedge edge) can take up to that many spots,
+    e.g. the same reflection from grains at both ends of a long sample (radially split spots)."""
     if not len(gq) or not len(q):
         return []
     side0 = np.asarray(side0, bool)
     tw = np.nonzero(side0)[0]
     cols = np.concatenate([np.arange(len(gq)), tw])                      # second copy of every on-axis group
     neg = np.concatenate([np.zeros(len(gq), bool), np.ones(len(tw), bool)])
+    if copies > 1:
+        cols, neg = np.tile(cols, int(copies)), np.tile(neg, int(copies))
     s0 = side0[cols]
     co = np.where(s0[None], np.abs(chi)[:, None], chi[:, None])
-    C = ((q[:, None] - gq[cols][None]) / tol_q) ** 2 + ((co - gchi[cols][None]) / tol_chi) ** 2
+    tq = np.broadcast_to(np.asarray(tol_q, float), np.shape(gq))[cols]
+    C = ((q[:, None] - gq[cols][None]) / tq[None]) ** 2 + ((co - gchi[cols][None]) / tol_chi) ** 2
     edge_ok = ~s0[None] | (neg[None] == (chi[:, None] < 0))              # each copy owns one wedge edge
     gate = (C <= 1.0) & edge_ok
     C = C + prior * (-np.log10(np.clip(gI[cols], 1e-6, 1)))[None]
@@ -249,7 +263,8 @@ class Problem:
         gI = np.array([self.refl.I[g.members].sum() for g in groups])
         qxy, qz, q, chi, sq, schi = self.observed(geom)
         use = self.used_obs(geom)
-        m = match_spots(q[use], chi[use], gq, gchi, gI, on_axis(groups), tol_q, tol_chi, self.cfg.intensity_prior)
+        m = match_spots(q[use], chi[use], gq, gchi, gI, on_axis(groups), q_tol(tol_q, gq, self.cfg.q_rel), tol_chi,
+                        self.cfg.intensity_prior, self.cfg.spots_per_reflection)
         return [(int(use[i]), j) for i, j in m], groups
 
     # ------------------------------------------------------------------ residuals
@@ -260,7 +275,7 @@ class Problem:
         gx, gz = self.group_coords(gsel, cell, tilt, geom)
         gq, gchi = np.hypot(gx, gz), np.degrees(np.arctan2(gx, gz))
         oi = np.array([i for i, _ in pairs])
-        sig_q = np.hypot(sq[oi], self.cfg.q_floor)
+        sig_q = np.hypot(np.hypot(sq[oi], self.cfg.q_floor), self.cfg.q_rel * gq)
         sig_c = np.hypot(schi[oi], self.cfg.chi_floor_deg)
         r = [(q[oi] - gq) / sig_q, (fold_chi(chi[oi], on_axis(gsel)) - gchi) / sig_c]
         if with_prior:
@@ -308,7 +323,8 @@ class Problem:
         gx, gz = self.group_coords(gsel, cell, tilt, geom)
         oi = np.array([i for i, _ in pairs])
         co = fold_chi(chi[oi], on_axis(gsel))
-        c = ((q[oi] - np.hypot(gx, gz)) / tol_q) ** 2 + ((co - np.degrees(np.arctan2(gx, gz))) / tol_chi) ** 2
+        gq = np.hypot(gx, gz)
+        c = ((q[oi] - gq) / q_tol(tol_q, gq, self.cfg.q_rel)) ** 2 + ((co - np.degrees(np.arctan2(gx, gz))) / tol_chi) ** 2
         w = np.sqrt(np.clip(self.peaks.area[oi], 0, None))
         return float(np.sum(w * np.clip(1 - c, 0, None)))
 

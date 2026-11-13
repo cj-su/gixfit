@@ -35,7 +35,7 @@ from .crystal import Cell, Structure, PARAM_NAMES
 from .geometry import Geometry
 from .pattern import group_reflections, low_index_planes
 from .peaks import PeakTable
-from .fit import FitConfig, Problem, surrogate_peaks, on_axis, fold_chi, match_spots
+from .fit import FitConfig, Problem, surrogate_peaks, on_axis, fold_chi, match_spots, q_tol
 
 
 @dataclass
@@ -173,7 +173,8 @@ class MultiProblem:
         qxy, qz, q, chi, _, _ = self.observed(geom)
         use = self.used_obs(geom)
         side0 = np.concatenate([on_axis(g) for g in groups])   # on-axis groups: one spot per wedge edge
-        m = match_spots(q[use], chi[use], gq, gchi, gI, side0, tol_q, tol_chi, self.cfg.intensity_prior)
+        m = match_spots(q[use], chi[use], gq, gchi, gI, side0, q_tol(tol_q, gq, self.cfg.q_rel), tol_chi,
+                        self.cfg.intensity_prior, self.cfg.spots_per_reflection)
         return [(int(use[i]), j) for i, j in m]
 
     def _pair_coords(self, p, pairs, groups):
@@ -202,7 +203,7 @@ class MultiProblem:
         qxy, qz, q, chi, sq, schi = self.observed(geom)
         gq, gc, _ = self._pair_coords(p, pairs, groups)
         oi = np.array([i for i, _ in pairs], int)
-        r = [(q[oi] - gq) / np.hypot(sq[oi], self.cfg.q_floor),
+        r = [(q[oi] - gq) / np.hypot(np.hypot(sq[oi], self.cfg.q_floor), self.cfg.q_rel * gq),
              (chi[oi] - gc) / np.hypot(schi[oi], self.cfg.chi_floor_deg)]
         if with_prior:
             pr = [(p[k] - pv[1]) / pv[0] for k, pv in enumerate(self.prior) if pv]
@@ -217,7 +218,7 @@ class MultiProblem:
         qxy, qz, q, chi, _, _ = self.observed(geom)
         gq, gc, _ = self._pair_coords(p, pairs, groups)
         oi = np.array([i for i, _ in pairs], int)
-        c = ((q[oi] - gq) / tol_q) ** 2 + ((chi[oi] - gc) / tol_chi) ** 2
+        c = ((q[oi] - gq) / q_tol(tol_q, gq, self.cfg.q_rel)) ** 2 + ((chi[oi] - gc) / tol_chi) ** 2
         w = np.sqrt(np.clip(self.peaks.area[oi], 0, None))
         return float(np.sum(w * np.clip(1 - c, 0, None)))
 

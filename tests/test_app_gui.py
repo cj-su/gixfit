@@ -136,6 +136,12 @@ def main():
     assert warned and len(app.evals) == n_ev and not app.busy        # too few spots: refused, nothing started
     app.vars["q_min"].set(q0); app.vars["q_max"].set(q1); app._on_qrange(); root.update()
     assert not any("stale" in app.tv_res.item(i, "tags") for i in app.tv_res.get_children(""))
+    L0 = app.vars["sample_length_mm"].get()                        # sample length changes the window -> stale
+    app.vars["sample_length_mm"].set("12"); app._on_qrange(); root.update()
+    assert all("stale" in app.tv_res.item(i, "tags") for i in app.tv_res.get_children(""))
+    assert abs(app._read_fields().q_rel() - 6.0 / app._read_fields().sdd_mm) < 1e-12
+    app.vars["sample_length_mm"].set(L0); app._on_qrange(); root.update()
+    assert not any("stale" in app.tv_res.item(i, "tags") for i in app.tv_res.get_children(""))
 
     app.lb_lib.delete(0, "end")
     app.lb_lib.insert("end", os.path.dirname(candidate))

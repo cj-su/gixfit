@@ -62,6 +62,7 @@ class Settings:
     mosaic_deg: float = 3.0
     max_strain: float = 0.06
     match_q: float = 0.015                 # final matching window: |q| (A^-1) ...
+    sample_length_mm: float = 0.0          # sample length along the beam: q window grows by (L/2)/sdd * q (0 = off)
     match_chi: float = 4.0                 # ... and angle (deg); the paper's default is 0.015 A^-1 / 4 deg
     max_angle_dev: float = 5.0
     n_strong: int = 20
@@ -92,6 +93,8 @@ class Settings:
             raise ValueError("Invalid diagnostic count, texture count or plane range.")
         if not (0.003 <= self.match_q <= 0.1 and 1.0 <= self.match_chi <= 20.0):
             raise ValueError("Matching window must be 0.003-0.1 A^-1 and 1-20 deg.")
+        if not (0.0 <= (self.sample_length_mm or 0.0) <= 100.0):
+            raise ValueError("Sample length along the beam must be 0-100 mm (0 = off).")
 
     def detection_settings(self) -> dict:
         names = ("wavelength", "sdd_mm", "pixel_mm", "x0", "y0", "alpha_i_deg", "alpha_c_deg",
@@ -120,7 +123,15 @@ class Settings:
     def fit_config(self) -> FitConfig:
         return FitConfig(qmax=self.q_max + 0.1, q_range=(self.q_min, self.q_max), mosaic_deg=self.mosaic_deg,
                          max_strain=self.max_strain, max_angle_dev=self.max_angle_dev, n_strong=self.n_strong,
-                         tol_schedule=self.tol_schedule())
+                         tol_schedule=self.tol_schedule(), q_rel=self.q_rel(),
+                         spots_per_reflection=2 if self.q_rel() > 0 else 1)   # long sample: split spots
+
+    def q_rel(self) -> float:
+        """relative |q| spread from the illuminated sample length: (L/2) / sample-detector distance.  Grains at
+        different places along the sample put the same reflection at slightly different |q| (radially split spots),
+        so with a sample length set each reflection may also index up to two spots."""
+        L = float(self.sample_length_mm or 0.0)
+        return 0.5 * L / float(self.sdd_mm) if L > 0 and self.sdd_mm else 0.0
 
     def multi_config(self, **kw) -> MultiConfig:
         mc = MultiConfig(max_components=self.max_textures, planes_maxidx=self.planes_maxidx, n_null=self.n_null,
@@ -504,7 +515,7 @@ def joint_fit(session: Session, structs, settings: Settings = None, log=None, mi
     rows = phase_map(res, session.peaks, min_I=min_I)
     jf = JointFit(" + ".join(st.name for st in structs) + " (together)", [st.name for st in structs], structs,
                   res, rows, summary(rows, res), forced, time.time() - t0, len(session.peaks),
-                  q_range=(float(s.q_min), float(s.q_max)), window=(float(s.match_q), float(s.match_chi)))
+                  q_range=(float(s.q_min), float(s.q_max)), window=(float(s.match_q), float(s.match_chi), float(s.sample_length_mm or 0.0)))
     log(jf.report)
     return jf
 

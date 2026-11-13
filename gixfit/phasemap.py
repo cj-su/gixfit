@@ -31,7 +31,7 @@ from __future__ import annotations
 import csv
 import numpy as np
 
-from .fit import FitConfig, on_axis, fold_chi
+from .fit import FitConfig, on_axis, fold_chi, q_tol
 from .multi import MultiConfig, MultiProblem, decompose, unique_planes
 from .pattern import low_index_planes
 
@@ -99,6 +99,7 @@ def phase_map(res, peaks, tol=None, min_I=0.02):
     intensity (1 = the 10th strongest reflection of that phase); stops the many weak reflections of a large cell
     from 'explaining' every spot."""
     (tol_q, tol_chi), q_range = _tolerance(res)
+    q_rel = getattr(res.probs[0].cfg, "q_rel", 0.0)
     if tol is not None:
         tol_q, tol_chi = tol
     geom = res.geom
@@ -118,7 +119,7 @@ def phase_map(res, peaks, tol=None, min_I=0.02):
             gq, gc = np.hypot(gx, gz), np.degrees(np.arctan2(gx, gz))
             side0 = on_axis(res.groups[c])
             co = fold_chi(np.full(len(gx), chi[i]), side0)
-            cost = ((q[i] - gq) / tol_q) ** 2 + ((co - gc) / tol_chi) ** 2
+            cost = ((q[i] - gq) / q_tol(tol_q, gq, q_rel)) ** 2 + ((co - gc) / tol_chi) ** 2
             cost = np.where(np.asarray(gI) >= min_I, cost, np.inf)
             j = int(np.argmin(cost))
             if cost[j] <= 1.0:
