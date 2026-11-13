@@ -15,8 +15,13 @@ from scipy.optimize import least_squares
 
 # ---------------------------------------------------------------------- image
 def load_image(path, despike=True, dead_pixels=()):
-    import tifffile
-    D = tifffile.imread(str(path)).astype(np.float64)
+    """TIFF (synchrotron, stitched) or EDF (laboratory systems such as the Xeuss) -> float64 image."""
+    from .edf import is_edf, read_edf
+    if is_edf(path):
+        D = read_edf(path)[1]
+    else:
+        import tifffile
+        D = tifffile.imread(str(path)).astype(np.float64)
     for r, c in dead_pixels:
         D[r, c] = np.mean([D[r + 1, c + 1], D[r + 1, c - 1], D[r - 1, c + 1], D[r - 1, c - 1]])
     if despike:

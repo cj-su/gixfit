@@ -95,6 +95,30 @@ def fold_chi(chi_obs, side0):
     return np.where(side0, np.abs(chi_obs), chi_obs)
 
 
+def match_spots(q, chi, gq, gchi, gI, side0, tol_q, tol_chi, prior):
+    """one-to-one assignment of observed spots (q, chi) to predicted groups (gq, gchi, rel. intensity gI).
+
+    Cost (dq/tol_q)^2 + (dchi/tol_chi)^2, gated at 1, plus prior * -log10(gI).  An on-axis group (side0) is seen on
+    BOTH edges of the missing wedge, so it gets two columns: one takes a spot with chi >= 0, the other a spot with
+    chi < 0 (compared on |chi|).  Returns (row index into q, group index) pairs; a group index can appear twice."""
+    if not len(gq) or not len(q):
+        return []
+    side0 = np.asarray(side0, bool)
+    tw = np.nonzero(side0)[0]
+    cols = np.concatenate([np.arange(len(gq)), tw])                      # second copy of every on-axis group
+    neg = np.concatenate([np.zeros(len(gq), bool), np.ones(len(tw), bool)])
+    s0 = side0[cols]
+    co = np.where(s0[None], np.abs(chi)[:, None], chi[:, None])
+    C = ((q[:, None] - gq[cols][None]) / tol_q) ** 2 + ((co - gchi[cols][None]) / tol_chi) ** 2
+    edge_ok = ~s0[None] | (neg[None] == (chi[:, None] < 0))              # each copy owns one wedge edge
+    gate = (C <= 1.0) & edge_ok
+    C = C + prior * (-np.log10(np.clip(gI[cols], 1e-6, 1)))[None]
+    big = 1e6
+    Cg = np.where(gate, C, big)
+    r, c = linear_sum_assignment(Cg)
+    return [(int(i), int(cols[k])) for i, k in zip(r, c) if Cg[i, k] < big]
+
+
 class Problem:
     def __init__(self, struct: Structure, contact, geom: Geometry, peaks: PeakTable, mask, cfg: FitConfig,
                  name=""):
@@ -225,15 +249,8 @@ class Problem:
         gI = np.array([self.refl.I[g.members].sum() for g in groups])
         qxy, qz, q, chi, sq, schi = self.observed(geom)
         use = self.used_obs(geom)
-        co = fold_chi(chi[use, None], on_axis(groups)[None])
-        C = ((q[use, None] - gq[None]) / tol_q) ** 2 + ((co - gchi[None]) / tol_chi) ** 2
-        gate = C <= 1.0
-        C = C + self.cfg.intensity_prior * (-np.log10(np.clip(gI, 1e-6, 1)))[None]
-        big = 1e6
-        Cg = np.where(gate, C, big)
-        r, c = linear_sum_assignment(Cg)
-        pairs = [(int(use[i]), int(j)) for i, j in zip(r, c) if Cg[i, j] < big]
-        return pairs, groups
+        m = match_spots(q[use], chi[use], gq, gchi, gI, on_axis(groups), tol_q, tol_chi, self.cfg.intensity_prior)
+        return [(int(use[i]), j) for i, j in m], groups
 
     # ------------------------------------------------------------------ residuals
     def residuals(self, p, pairs, groups, with_prior=True):

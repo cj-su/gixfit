@@ -96,14 +96,15 @@ class WorkflowTests(unittest.TestCase):
 
 class GuiStateTests(unittest.TestCase):
     def test_field_read_does_not_mutate_settings_on_error(self):
-        from gixfit.app import App, FIELDS
+        from gixfit.app import App, FIELDS, WINDOWS
         class Variable:
             def __init__(self, value): self.value = str(value)
             def get(self): return self.value
         original = Settings(alpha_i_deg=.12)
         ui = SimpleNamespace(settings=original,
             vars={name: Variable(getattr(original, name)) for name, _, _ in FIELDS},
-            v_tex=Variable(1), v_maxidx=Variable(2), v_chance=Variable("Off (fast fit)"), v_top=Variable(3))
+            v_tex=Variable(1), v_maxidx=Variable(2), v_chance=Variable("Off (fast fit)"), v_top=Variable(3),
+            v_window=Variable(next(iter(WINDOWS))))
         ui.vars["x0"].value = "123"
         ui.vars["y0"].value = "invalid"
         with self.assertRaises(ValueError):

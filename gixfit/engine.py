@@ -61,6 +61,8 @@ class Settings:
     q_max: float = 1.9
     mosaic_deg: float = 3.0
     max_strain: float = 0.06
+    match_q: float = 0.015                 # final matching window: |q| (A^-1) ...
+    match_chi: float = 4.0                 # ... and angle (deg); the paper's default is 0.015 A^-1 / 4 deg
     max_angle_dev: float = 5.0
     n_strong: int = 20
     # model search / chance level
@@ -71,6 +73,7 @@ class Settings:
     null_modes: tuple = ("chi", "q")
     workers: int = 0
     identify_null_top: int = 3              # identify: chance test only for the best N library entries
+    edf_reference: list = None              # EDF only: [x0, y0, det0x, det0z] = beam centre at known detector motors
 
     def validate(self) -> None:
         for name in ("wavelength", "sdd_mm", "pixel_mm", "threshold", "mosaic_deg"):
@@ -87,6 +90,8 @@ class Settings:
             raise ValueError("Critical angle must be between 0 and 90 degrees.")
         if self.n_null < 0 or self.max_textures < 1 or self.planes_maxidx < 1:
             raise ValueError("Invalid diagnostic count, texture count or plane range.")
+        if not (0.003 <= self.match_q <= 0.1 and 1.0 <= self.match_chi <= 20.0):
+            raise ValueError("Matching window must be 0.003-0.1 A^-1 and 1-20 deg.")
 
     def detection_settings(self) -> dict:
         names = ("wavelength", "sdd_mm", "pixel_mm", "x0", "y0", "alpha_i_deg", "alpha_c_deg",
@@ -95,14 +100,27 @@ class Settings:
 
     def geometry(self, image_path=None) -> Geometry:
         ai = self.alpha_i_deg
+        if ai is None and image_path and str(image_path).lower().endswith(".edf"):
+            from .edf import read_header, geometry_from_header
+            try:                                          # EDF: incident angle from the header ('om')
+                ai = geometry_from_header(read_header(image_path))[0].get("alpha_i_deg")
+            except (OSError, ValueError):
+                ai = None
         if ai is None:
             m = re.search(r"_th(\d+\.\d+)", os.path.basename(image_path or ""))
             ai = float(m.group(1)) if m else 0.1
         return Geometry(self.wavelength, self.sdd_mm, self.pixel_mm, self.x0, self.y0, ai, self.alpha_c_deg)
 
+    def tol_schedule(self) -> tuple:
+        """shrinking matching windows ending at (match_q, match_chi)."""
+        tq, tc = float(self.match_q), float(self.match_chi)
+        steps = [(0.05, 10.0), (0.03, 6.0)]
+        return tuple([(q, c) for q, c in steps if q > tq and c > tc] + [(tq, tc)])
+
     def fit_config(self) -> FitConfig:
         return FitConfig(qmax=self.q_max + 0.1, q_range=(self.q_min, self.q_max), mosaic_deg=self.mosaic_deg,
-                         max_strain=self.max_strain, max_angle_dev=self.max_angle_dev, n_strong=self.n_strong)
+                         max_strain=self.max_strain, max_angle_dev=self.max_angle_dev, n_strong=self.n_strong,
+                         tol_schedule=self.tol_schedule())
 
     def multi_config(self, **kw) -> MultiConfig:
         mc = MultiConfig(max_components=self.max_textures, planes_maxidx=self.planes_maxidx, n_null=self.n_null,
@@ -408,6 +426,7 @@ class JointFit:
     seconds: float
     n_detected: int = 0          # all detected spots; rows cover only those in the fitted q range
     q_range: tuple = None        # (q_min, q_max) used for this fit
+    window: tuple = None         # final matching window (A^-1, deg) used for this fit
     joint: bool = True
     z_chi: float = np.nan
     z_q: float = np.nan
@@ -485,7 +504,7 @@ def joint_fit(session: Session, structs, settings: Settings = None, log=None, mi
     rows = phase_map(res, session.peaks, min_I=min_I)
     jf = JointFit(" + ".join(st.name for st in structs) + " (together)", [st.name for st in structs], structs,
                   res, rows, summary(rows, res), forced, time.time() - t0, len(session.peaks),
-                  q_range=(float(s.q_min), float(s.q_max)))
+                  q_range=(float(s.q_min), float(s.q_max)), window=(float(s.match_q), float(s.match_chi)))
     log(jf.report)
     return jf
 

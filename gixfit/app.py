@@ -37,7 +37,7 @@ DEFAULT_LIBS = [p for p in (
 FIELDS = [  # (attribute, label, kind)
     ("wavelength", "Wavelength (A)", float), ("sdd_mm", "Sample-detector (mm)", float),
     ("pixel_mm", "Pixel size (mm)", float), ("x0", "Beam centre column x0", float),
-    ("y0", "Beam centre row y0", float), ("alpha_i_deg", "Incident angle (deg, blank = file name)", float),
+    ("y0", "Beam centre row y0", float), ("alpha_i_deg", "Incident angle (deg, blank = file name / EDF)", float),
     ("qz_min", "Mask below q_z (horizon)", float), ("threshold", "Spot threshold (sigma)", float),
     ("q_min", "q min used (A^-1)", float), ("q_max", "q max used (A^-1)", float),
 ]
@@ -47,6 +47,9 @@ class _Canvas(FigureCanvasTkAgg):
 
 
 NO_VARIANTS = "(single geometry)"      # shown in the geometry-variant box when the settings define only one
+
+WINDOWS = {"Strict 0.015 A^-1 / 4 deg (paper)": (0.015, 4.0), "Normal 0.020 A^-1 / 5 deg": (0.02, 5.0),
+           "Loose 0.030 A^-1 / 6 deg": (0.03, 6.0)}
 
 CHANCE = {"Off (fast fit)": 0, "Preview (6; unstable)": 6, "Standard (100)": 100, "Extended (200)": 200}
 
@@ -82,7 +85,7 @@ class App:
         f1 = ttk.LabelFrame(left, text="1  Image and detector", padding=6)
         f1.pack(fill="x")
         self.v_image = tk.StringVar()
-        ttk.Label(f1, text="GIWAXS image (.tif)").grid(row=0, column=0, sticky="w")
+        ttk.Label(f1, text="GIWAXS image (.tif or .edf)").grid(row=0, column=0, sticky="w")
         e = ttk.Entry(f1, textvariable=self.v_image, width=38)
         e.grid(row=1, column=0, columnspan=2, sticky="we")
         ttk.Button(f1, text="Browse...", command=self._browse_image).grid(row=1, column=2, padx=2)
@@ -126,6 +129,11 @@ class App:
         cb.grid(row=3, column=1, sticky="w")
         cb.bind("<<ComboboxSelected>>", lambda *_: self._draw(self._shown_ev))
         cb.bind("<Return>", lambda *_: self._draw(self._shown_ev))
+        ttk.Label(fo, text="Matching window").grid(row=4, column=0, sticky="w")
+        self.v_window = tk.StringVar(value=next(iter(WINDOWS)))
+        cbw = ttk.Combobox(fo, textvariable=self.v_window, values=list(WINDOWS), state="readonly", width=26)
+        cbw.grid(row=4, column=1, sticky="w")
+        cbw.bind("<<ComboboxSelected>>", lambda *_: self._on_qrange())   # results with another window turn grey
 
         # --- 2 tasks
         nb = ttk.Notebook(left)
@@ -274,6 +282,11 @@ class App:
             self.vars[attr].set("" if v is None else f"{v:g}")
         self.v_tex.set(str(s.max_textures))
         self.v_maxidx.set(str(s.planes_maxidx))
+        win = next((k for k, v in WINDOWS.items() if v == (s.match_q, s.match_chi)), None)
+        if win is None:
+            win = f"Custom {s.match_q:g} A^-1 / {s.match_chi:g} deg"
+            WINDOWS[win] = (s.match_q, s.match_chi)
+        self.v_window.set(win)
         self.v_top.set(str(s.identify_null_top))
         label = next((k for k, v in CHANCE.items() if v == s.n_null), None)
         if label is None:
@@ -294,6 +307,7 @@ class App:
                 raise ValueError(f"'{label}' is not a number: {txt!r}")
         s.max_textures = int(self.v_tex.get())
         s.planes_maxidx = int(self.v_maxidx.get())
+        s.match_q, s.match_chi = WINDOWS[self.v_window.get()]
         s.n_null = CHANCE[self.v_chance.get()]
         s.identify_null_top = int(self.v_top.get())
         s.validate()
@@ -317,9 +331,36 @@ class App:
         self._log("Synthetic tutorial only; not experimental validation. Geometry is supplied for this demo.")
 
     def _browse_image(self):
-        p = filedialog.askopenfilename(title="GIWAXS image", filetypes=[("TIFF", "*.tif *.tiff"), ("all", "*.*")])
+        p = filedialog.askopenfilename(title="GIWAXS image", filetypes=[("GIWAXS images", "*.tif *.tiff *.edf"),
+                                                                        ("TIFF", "*.tif *.tiff"), ("EDF", "*.edf"),
+                                                                        ("all", "*.*")])
         if p:
             self.v_image.set(p)
+            if p.lower().endswith(".edf"):
+                self._fill_from_edf(p)
+
+    def _fill_from_edf(self, path):
+        """laboratory EDF image: wavelength, distance, pixel size, beam centre and incident angle from its header."""
+        from .edf import read_header, geometry_from_header
+        try:
+            s = self._read_fields()
+        except ValueError:
+            s = deepcopy(self.settings)
+        try:
+            geo, notes = geometry_from_header(read_header(path), s.edf_reference)
+        except (OSError, ValueError, KeyError) as e:
+            self._log(f"EDF header not read: {e}"); return
+        for attr, val in geo.items():
+            setattr(s, attr, val)
+        self.settings = s
+        self._fill_fields(s)
+        self._log(f"Geometry from the EDF header of {os.path.basename(path)}: " +
+                  ", ".join(f"{k} {v:g}" for k, v in geo.items()))
+        for n in notes:
+            self._log("  " + n)
+        self.v_status.set("Geometry filled from the EDF header" +
+                          (" (beam centre corrected for the detector motors)." if s.edf_reference else
+                           ": check the beam centre, the header is not updated when the detector moves."))
 
     def _browse_cif(self, var):
         p = filedialog.askopenfilename(title="CIF file", filetypes=[("CIF", "*.cif"), ("all", "*.*")])
@@ -678,6 +719,13 @@ class App:
         st = (getattr(o, "recipe", None) or {}).get("settings") or {}
         return (st["q_min"], st["q_max"]) if "q_min" in st else None
 
+    @staticmethod
+    def _fit_window(o):
+        if getattr(o, "joint", False):
+            return getattr(o, "window", None)
+        st = (getattr(o, "recipe", None) or {}).get("settings") or {}
+        return (st.get("match_q", 0.015), st.get("match_chi", 4.0)) if st else None
+
     def _mark_stale(self):
         """grey the result rows fitted with another q range than the one in the boxes; returns their count."""
         qr = self._q_range_now()
@@ -686,6 +734,8 @@ class App:
         for iid in self.tv_res.get_children(""):
             fr = self._fit_qrange(self._row_object(iid))
             stale = qr is not None and fr is not None and (abs(fr[0] - qr[0]) > 1e-9 or abs(fr[1] - qr[1]) > 1e-9)
+            fw, w = self._fit_window(self._row_object(iid)), WINDOWS.get(self.v_window.get())
+            stale = stale or (fw is not None and w is not None and tuple(fw) != tuple(w))
             self.tv_res.item(iid, tags=("stale",) if stale else ())
             n += stale
         return n
@@ -705,7 +755,8 @@ class App:
         n_in = int(np.sum((q >= qr[0]) & (q <= qr[1])))
         msg = (f"q range {qr[0]:g}-{qr[1]:g} A^-1: {n_in} of {len(q)} spots in range (dashed arcs on the map).")
         if n_stale:
-            msg += f" {n_stale} result(s) were fitted with another range (grey): press Check match / Compare again."
+            msg += (f" {n_stale} result(s) were fitted with another q range or matching window (grey): press Check match "
+                    "/ Compare again.")
         self.v_status.set(msg)
 
     def _fill_results(self):

@@ -35,7 +35,7 @@ from .crystal import Cell, Structure, PARAM_NAMES
 from .geometry import Geometry
 from .pattern import group_reflections, low_index_planes
 from .peaks import PeakTable
-from .fit import FitConfig, Problem, surrogate_peaks, on_axis, fold_chi
+from .fit import FitConfig, Problem, surrogate_peaks, on_axis, fold_chi, match_spots
 
 
 @dataclass
@@ -172,14 +172,9 @@ class MultiProblem:
         gq, gchi = np.hypot(gx, gz), np.degrees(np.arctan2(gx, gz))
         qxy, qz, q, chi, _, _ = self.observed(geom)
         use = self.used_obs(geom)
-        side0 = np.concatenate([on_axis(g) for g in groups])
-        co = fold_chi(chi[use, None], side0[None])          # on-axis groups may sit on either wedge edge
-        C = ((q[use, None] - gq[None]) / tol_q) ** 2 + ((co - gchi[None]) / tol_chi) ** 2
-        gate = C <= 1.0
-        C = C + self.cfg.intensity_prior * (-np.log10(np.clip(gI, 1e-6, 1)))[None]
-        Cg = np.where(gate, C, 1e6)
-        r, c = linear_sum_assignment(Cg)
-        return [(int(use[i]), int(j)) for i, j in zip(r, c) if Cg[i, j] < 1e6]
+        side0 = np.concatenate([on_axis(g) for g in groups])   # on-axis groups: one spot per wedge edge
+        m = match_spots(q[use], chi[use], gq, gchi, gI, side0, tol_q, tol_chi, self.cfg.intensity_prior)
+        return [(int(use[i]), j) for i, j in m]
 
     def _pair_coords(self, p, pairs, groups):
         """predicted (q, chi) of the matched groups, one entry per pair.  For on-axis groups chi takes the sign of
